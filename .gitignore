@@ -1,0 +1,8 @@
+build/
+.venv/
+corpus/*.bin
+*.t9
+*.o
+.DS_Store
+__pycache__/
+*.pyc

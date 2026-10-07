@@ -1,0 +1,40 @@
+=== runs/e98  (5150 frames, 40.0s) ===
+Present mode: {'Composed: Flip': 5150} | SyncInterval: {-1: 5150} | Tearing: {0: 5150}
+Avg FPS 128.8  | frametime p50 3.32  p95 4.99  p99 8.76  p99.9 114.37  max 15644.49 ms
+1% low 2.3 fps | 0.1% low 0.2 fps
+Frame-time spikes >2x median (6.6ms): 112 (2.17%)   >3x: 33
+Frame-to-frame jitter: mean 8.03 ms, p95 0.91, stdev of frametime 224.01
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.32 p95 9.16 p99 16.59 stdev 341.15
+  display-interval histogram (ms bins): {'4-6': 1, '6-10': 2191, '10-13': 1, '15-18': 15, '18-21': 1, '21-25': 1, '25-34': 1, '50-100': 2, '100-1000': 3}
+  frames never displayed / dropped: 2931  (zero-interval: 0)
+  |display - present| interval error: mean 4.64 ms, p95 5.80
+--- Where is the time going?
+CPU busy (app) p50 3.20 p99 8.36 ms | GPU time p50 3.21 p99 6.24 ms | MsInPresentAPI p50 0.11 p99 0.43
+CPUWait p50 0.11 p99 0.43
+Present->display latency p50 10.72 p99 14.24
+During spikes (n=112): CPU busy avg 199.7  GPU time avg 154.9  InPresentAPI avg 0.5  CPUWait avg 0.5
+  spike attribution: {'CPU-bound (game thread)': 109, 'stall elsewhere (wait/descheduled)': 2, 'blocked in Present()': 1}
+  spike spacing (s): median 0.01, p25 0.01, p75 0.04  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count         max
+sec                    
+0.0      31  679.608500
+22.0    211   21.326375
+27.0    302    7.679125
+32.0    299   16.246083
+37.0    303    4.820667
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 46.0, 'cpu1': 52.0, 'cpu2': 32.0, 'cpu3': 13.0, 'cpu4': 5.0, 'cpu5': 3.0} | max core avg-peak: 83
+   DPC time per core avg 0.62% max 15.5% | interrupt avg 1.42% max 12.4%
+   gpu_3d: avg 16% max 75%
+   gpu_copy: avg 13% max 77%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean    max  count
+tid                      
+12792  69.3   80.8     20
+4848   65.3  100.6     40
+9148    7.2   25.5      8
+4404    2.5    3.0      3
+1952    2.2    4.5      4
+--- Host: prl_vm_app CPU avg 188% max 252% (of 1000% = 10 cores) | RSS 20498MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'Google': 43, 'claude': 1, 'MTLCompilerService': 1}

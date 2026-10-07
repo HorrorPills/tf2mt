@@ -1,0 +1,44 @@
+=== runs/empty_dx81  (9362 frames, 45.0s) ===
+Present mode: {'Composed: Flip': 9362} | SyncInterval: {-1: 9362} | Tearing: {0: 9362}
+Avg FPS 208.1  | frametime p50 4.66  p95 5.47  p99 6.11  p99.9 13.10  max 111.95 ms
+1% low 97.2 fps | 0.1% low 27.8 fps
+Frame-time spikes >2x median (9.3ms): 24 (0.26%)   >3x: 6
+Frame-to-frame jitter: mean 0.28 ms, p95 0.72, stdev of frametime 1.65
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.33 p95 9.15 p99 9.31 stdev 2.06
+  display-interval histogram (ms bins): {'6-10': 5323, '10-13': 1, '15-18': 24, '100-1000': 2}
+  frames never displayed / dropped: 4012  (zero-interval: 0)
+  |display - present| interval error: mean 3.58 ms, p95 4.53
+--- Where is the time going?
+CPU busy (app) p50 4.58 p99 5.99 ms | GPU time p50 4.43 p99 5.57 ms | MsInPresentAPI p50 0.07 p99 0.17
+CPUWait p50 0.07 p99 0.17
+Present->display latency p50 11.20 p99 14.19
+During spikes (n=24): CPU busy avg 19.9  GPU time avg 9.0  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 23, 'GPU-bound': 1}
+  spike spacing (s): median 0.02, p25 0.01, p75 1.85  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     194  15.022083
+5.0     211   5.768542
+10.0    213   5.859792
+15.0    211   9.270583
+20.0    199   6.380250
+25.0    202  13.631292
+30.0    214   5.992833
+35.0    215   5.905208
+40.0    213   5.882000
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 20.0, 'cpu1': 50.0, 'cpu2': 46.0, 'cpu3': 4.0, 'cpu4': 3.0, 'cpu5': 2.0} | max core avg-peak: 77
+   DPC time per core avg 0.21% max 4.7% | interrupt avg 0.60% max 6.2%
+   gpu_3d: avg 10% max 11%
+   gpu_copy: avg 0% max 0%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean    max  count
+tid                      
+10844  98.5  101.4     45
+7912    1.8    4.5     18
+11032   1.5    1.5      1
+12560   1.5    1.5      1
+1968    0.2    1.5     44
+--- Host: prl_vm_app CPU avg 140% max 205% (of 1000% = 10 cores) | RSS 18729MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'Google': 44, 'WindowServer': 5, 'BiomeAgent': 1}

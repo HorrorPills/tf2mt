@@ -1,0 +1,43 @@
+=== runs/e90  (14478 frames, 40.0s) ===
+Present mode: {'Composed: Flip': 14478} | SyncInterval: {-1: 14478} | Tearing: {0: 14478}
+Avg FPS 362.1  | frametime p50 2.70  p95 3.19  p99 3.65  p99.9 7.49  max 17.35 ms
+1% low 206.4 fps | 0.1% low 95.1 fps
+Frame-time spikes >2x median (5.4ms): 26 (0.18%)   >3x: 14
+Frame-to-frame jitter: mean 0.22 ms, p95 0.66, stdev of frametime 0.36
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.31 p95 9.94 p99 10.25 stdev 0.87
+  display-interval histogram (ms bins): {'4-6': 2, '6-10': 4579, '10-13': 210, '13-15': 1, '15-18': 2}
+  frames never displayed / dropped: 9684  (zero-interval: 0)
+  |display - present| interval error: mean 5.58 ms, p95 7.18
+--- Where is the time going?
+CPU busy (app) p50 2.60 p99 3.53 ms | GPU time p50 1.86 p99 2.36 ms | MsInPresentAPI p50 0.10 p99 0.17
+CPUWait p50 0.10 p99 0.17
+Present->display latency p50 9.91 p99 13.17
+During spikes (n=26): CPU busy avg 8.4  GPU time avg 5.6  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 26}
+  spike spacing (s): median 0.01, p25 0.01, p75 0.19  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count       max
+sec                  
+0.0     360  4.033000
+5.0     366  4.835333
+10.0    367  3.637125
+15.0    358  4.011792
+20.0    369  4.021458
+25.0    368  3.578458
+30.0    364  4.660792
+35.0    365  3.782375
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 46.0, 'cpu1': 74.0, 'cpu2': 36.0, 'cpu3': 18.0, 'cpu4': 7.0, 'cpu5': 2.0} | max core avg-peak: 86
+   DPC time per core avg 0.38% max 7.8% | interrupt avg 1.19% max 9.3%
+   gpu_3d: avg 24% max 25%
+   gpu_copy: avg 0% max 0%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+10696  79.9  90.8     40
+4960   58.4  67.1     40
+6008    1.9   4.5     20
+4152    1.7   3.0     19
+5420    1.6   3.0     13
+--- Host: prl_vm_app CPU avg 223% max 313% (of 1000% = 10 cores) | RSS 21118MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'Google': 45, 'launchd': 1}

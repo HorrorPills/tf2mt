@@ -1,0 +1,45 @@
+=== runs/t_nodefender  (7181 frames, 60.0s) ===
+Present mode: {'Composed: Flip': 7181} | SyncInterval: {-1: 7181} | Tearing: {0: 7181}
+Avg FPS 119.7  | frametime p50 8.02  p95 10.46  p99 11.10  p99.9 19.13  max 30.85 ms
+1% low 76.7 fps | 0.1% low 44.6 fps
+Frame-time spikes >2x median (16.0ms): 9 (0.13%)   >3x: 1
+Frame-to-frame jitter: mean 2.79 ms, p95 4.27, stdev of frametime 1.63
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.32 p95 9.99 p99 10.23 stdev 0.96
+  display-interval histogram (ms bins): {'4-6': 1, '6-10': 6835, '10-13': 332, '13-15': 4, '15-18': 4, '18-21': 1, '21-25': 2, '25-34': 2}
+  frames never displayed / dropped: 0  (zero-interval: 0)
+  |display - present| interval error: mean 1.54 ms, p95 3.17
+--- Where is the time going?
+CPU busy (app) p50 7.88 p99 10.97 ms | GPU time p50 3.89 p99 4.70 ms | MsInPresentAPI p50 0.12 p99 0.22
+CPUWait p50 0.12 p99 0.22
+Present->display latency p50 9.57 p99 15.00
+During spikes (n=9): CPU busy avg 21.2  GPU time avg 10.7  InPresentAPI avg 0.3  CPUWait avg 0.3
+  spike attribution: {'CPU-bound (game thread)': 9}
+  spike spacing (s): median 8.83, p25 2.91, p75 10.83  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     121  11.052542
+5.0     120  11.221667
+10.0    119  19.914417
+15.0    120  10.905208
+20.0    120  13.552292
+25.0    118  22.381708
+30.0    119  11.073125
+35.0    120  13.540417
+40.0    120  11.001875
+45.0    120  11.217625
+50.0    120  12.225000
+55.0    120  11.139625
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 54.0, 'cpu1': 62.0, 'cpu2': 35.0, 'cpu3': 11.0, 'cpu4': 4.0, 'cpu5': 3.0} | max core avg-peak: 75
+   DPC time per core avg 0.26% max 4.7% | interrupt avg 0.70% max 6.2%
+   gpu_3d: avg 14% max 15%
+   gpu_copy: avg 0% max 1%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+10744  70.9  80.2     60
+5504   62.6  71.5     60
+1844    2.2   6.0     20
+4120    2.1   6.1     33
+4456    1.9   3.0      4

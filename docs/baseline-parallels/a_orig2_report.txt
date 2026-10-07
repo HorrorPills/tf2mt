@@ -1,0 +1,51 @@
+=== runs/a_orig2  (10572 frames, 90.0s) ===
+Present mode: {'Composed: Flip': 10572} | SyncInterval: {-1: 10572} | Tearing: {0: 10572}
+Avg FPS 117.5  | frametime p50 8.36  p95 9.54  p99 10.69  p99.9 26.43  max 48.69 ms
+1% low 65.7 fps | 0.1% low 29.9 fps
+Frame-time spikes >2x median (16.7ms): 23 (0.22%)   >3x: 13
+Frame-to-frame jitter: mean 0.57 ms, p95 1.53, stdev of frametime 1.10
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.33 p95 9.19 p99 16.65 stdev 1.50
+  display-interval histogram (ms bins): {'6-10': 10367, '10-13': 3, '15-18': 185, '21-25': 6, '25-34': 5, '34-50': 3, '50-100': 1}
+  frames never displayed / dropped: 2  (zero-interval: 0)
+  |display - present| interval error: mean 0.63 ms, p95 1.54
+--- Where is the time going?
+CPU busy (app) p50 8.21 p99 10.49 ms | GPU time p50 5.28 p99 7.29 ms | MsInPresentAPI p50 0.15 p99 0.26
+CPUWait p50 0.15 p99 0.26
+Present->display latency p50 7.21 p99 10.29
+During spikes (n=23): CPU busy avg 26.4  GPU time avg 16.5  InPresentAPI avg 0.4  CPUWait avg 0.4
+  spike attribution: {'CPU-bound (game thread)': 23}
+  spike spacing (s): median 0.80, p25 0.03, p75 7.51  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     105  26.551125
+5.0     118  12.498583
+10.0    119  10.050500
+15.0    108  13.768750
+20.0    119  10.627042
+25.0    120  10.194083
+30.0    112  25.810875
+35.0    119  10.319667
+40.0    118  10.220667
+45.0    117  11.040417
+50.0    118  10.004208
+55.0    116  12.444750
+60.0    120   9.502083
+65.0    119  10.017000
+70.0    117  33.727083
+75.0    120   9.715833
+80.0    120   9.633417
+85.0    120  10.141958
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 50.0, 'cpu1': 74.0, 'cpu2': 47.0, 'cpu3': 41.0, 'cpu4': 34.0, 'cpu5': 7.0} | max core avg-peak: 88
+   DPC time per core avg 0.38% max 10.8% | interrupt avg 1.08% max 10.8%
+   gpu_3d: avg 27% max 32%
+   gpu_copy: avg 0% max 1%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+9160   78.4  86.2     90
+13232  57.3  68.5     90
+7516    2.1   4.5     36
+3656    1.9   4.5     43
+4592    1.8   3.0     47

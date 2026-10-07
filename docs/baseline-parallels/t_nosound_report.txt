@@ -1,0 +1,42 @@
+=== runs/t_nosound  (5384 frames, 45.0s) ===
+Present mode: {'Composed: Flip': 5384} | SyncInterval: {-1: 5384} | Tearing: {0: 5384}
+Avg FPS 119.7  | frametime p50 8.12  p95 10.16  p99 10.91  p99.9 19.17  max 30.93 ms
+1% low 77.1 fps | 0.1% low 38.4 fps
+Frame-time spikes >2x median (16.2ms): 6 (0.11%)   >3x: 4
+Frame-to-frame jitter: mean 2.52 ms, p95 3.81, stdev of frametime 1.51
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.33 p95 9.64 p99 10.22 stdev 0.87
+  display-interval histogram (ms bins): {'6-10': 5244, '10-13': 131, '15-18': 4, '18-21': 2, '25-34': 3}
+  frames never displayed / dropped: 0  (zero-interval: 0)
+  |display - present| interval error: mean 1.36 ms, p95 2.68
+--- Where is the time going?
+CPU busy (app) p50 8.00 p99 10.80 ms | GPU time p50 3.69 p99 4.45 ms | MsInPresentAPI p50 0.11 p99 0.20
+CPUWait p50 0.11 p99 0.20
+Present->display latency p50 8.23 p99 15.33
+During spikes (n=6): CPU busy avg 25.0  GPU time avg 9.8  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 6}
+  spike spacing (s): median 7.56, p25 3.26, p75 10.83  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     121  10.804750
+5.0     119  10.906667
+10.0    118  21.819667
+15.0    120  12.485917
+20.0    119  11.744292
+25.0    120  11.645333
+30.0    120  11.333792
+35.0    118  25.506125
+40.0    120  10.919167
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 43.0, 'cpu1': 64.0, 'cpu2': 27.0, 'cpu3': 9.0, 'cpu4': 3.0, 'cpu5': 3.0} | max core avg-peak: 74
+   DPC time per core avg 0.21% max 4.7% | interrupt avg 0.49% max 4.6%
+   gpu_3d: avg 13% max 15%
+   gpu_copy: avg 0% max 0%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+6260   60.4  71.4     45
+6656   60.4  69.6     45
+7848    2.1   4.5     16
+12684   2.1   3.7     16
+5432    1.9   6.0     13

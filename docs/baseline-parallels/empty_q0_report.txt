@@ -1,0 +1,43 @@
+=== runs/empty_q0  (3053 frames, 45.0s) ===
+Present mode: {'Composed: Flip': 3053} | SyncInterval: {-1: 3053} | Tearing: {0: 3053}
+Avg FPS 67.9  | frametime p50 14.72  p95 19.60  p99 22.84  p99.9 37.59  max 49.09 ms
+1% low 37.4 fps | 0.1% low 23.7 fps
+Frame-time spikes >2x median (29.4ms): 5 (0.16%)   >3x: 1
+Frame-to-frame jitter: mean 2.34 ms, p95 6.63, stdev of frametime 3.27
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 16.62 p95 24.24 p99 25.12 stdev 4.64
+  display-interval histogram (ms bins): {'6-10': 873, '15-18': 2015, '21-25': 78, '25-34': 81, '34-50': 1, '50-100': 1}
+  frames never displayed / dropped: 4  (zero-interval: 0)
+  |display - present| interval error: mean 2.98 ms, p95 7.06
+--- Where is the time going?
+CPU busy (app) p50 14.59 p99 22.70 ms | GPU time p50 5.30 p99 8.37 ms | MsInPresentAPI p50 0.14 p99 0.24
+CPUWait p50 0.14 p99 0.24
+Present->display latency p50 5.73 p99 13.79
+During spikes (n=5): CPU busy avg 39.8  GPU time avg 14.4  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 5}
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0      78  18.552292
+5.0      66  26.778333
+10.0     69  20.008000
+15.0     80  20.484667
+20.0     59  23.988042
+25.0     78  19.940250
+30.0     64  22.106542
+35.0     53  26.412792
+40.0     72  18.203833
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 51.0, 'cpu1': 58.0, 'cpu2': 38.0, 'cpu3': 37.0, 'cpu4': 8.0, 'cpu5': 3.0} | max core avg-peak: 77
+   DPC time per core avg 0.42% max 7.8% | interrupt avg 0.76% max 6.2%
+   gpu_3d: avg 11% max 14%
+   gpu_copy: avg 0% max 1%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+      mean    max  count
+tid                     
+6472  93.4  100.1     45
+1180  45.4   60.6     45
+4868   4.2   10.6     42
+3076   4.0   13.6     39
+7580   3.6    9.1     36
+--- Host: prl_vm_app CPU avg 208% max 285% (of 1000% = 10 cores) | RSS 18954MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'WindowServer': 45, 'Google': 5, 'contactsd': 1}

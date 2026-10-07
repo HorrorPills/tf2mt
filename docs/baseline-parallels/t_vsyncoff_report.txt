@@ -1,0 +1,42 @@
+=== runs/t_vsyncoff  (5364 frames, 45.0s) ===
+Present mode: {'Composed: Flip': 5364} | SyncInterval: {-1: 5364} | Tearing: {0: 5364}
+Avg FPS 119.3  | frametime p50 8.12  p95 10.17  p99 11.10  p99.9 23.40  max 48.38 ms
+1% low 65.2 fps | 0.1% low 29.5 fps
+Frame-time spikes >2x median (16.2ms): 12 (0.22%)   >3x: 5
+Frame-to-frame jitter: mean 2.53 ms, p95 3.80, stdev of frametime 1.69
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.33 p95 9.67 p99 10.24 stdev 1.19
+  display-interval histogram (ms bins): {'6-10': 5214, '10-13': 130, '15-18': 12, '21-25': 1, '25-34': 3, '34-50': 2, '50-100': 1}
+  frames never displayed / dropped: 1  (zero-interval: 0)
+  |display - present| interval error: mean 1.35 ms, p95 2.64
+--- Where is the time going?
+CPU busy (app) p50 8.00 p99 10.99 ms | GPU time p50 3.69 p99 4.56 ms | MsInPresentAPI p50 0.11 p99 0.21
+CPUWait p50 0.11 p99 0.21
+Present->display latency p50 8.03 p99 15.34
+During spikes (n=12): CPU busy avg 25.9  GPU time avg 8.0  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 12}
+  spike spacing (s): median 0.97, p25 0.03, p75 5.06  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     120  11.134208
+5.0     120  10.929667
+10.0    120  11.251292
+15.0    119  10.853583
+20.0    120  10.830167
+25.0    117  31.300417
+30.0    117  21.083833
+35.0    121  11.156875
+40.0    120  11.717375
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 42.0, 'cpu1': 66.0, 'cpu2': 27.0, 'cpu3': 8.0, 'cpu4': 4.0, 'cpu5': 3.0} | max core avg-peak: 78
+   DPC time per core avg 0.15% max 3.1% | interrupt avg 0.54% max 10.8%
+   gpu_3d: avg 13% max 15%
+   gpu_copy: avg 0% max 0%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+6656   61.7  71.2     45
+6260   59.6  72.5     45
+5432    2.1   4.5     10
+12684   1.8   4.5     12
+7848    1.8   4.5     15

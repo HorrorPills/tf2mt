@@ -1,0 +1,43 @@
+=== runs/e81  (16179 frames, 40.0s) ===
+Present mode: {'Composed: Flip': 16179} | SyncInterval: {-1: 16179} | Tearing: {0: 16179}
+Avg FPS 404.6  | frametime p50 2.41  p95 2.96  p99 3.40  p99.9 5.72  max 17.95 ms
+1% low 228.0 fps | 0.1% low 102.6 fps
+Frame-time spikes >2x median (4.8ms): 23 (0.14%)   >3x: 12
+Frame-to-frame jitter: mean 0.24 ms, p95 0.74, stdev of frametime 0.36
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.31 p95 9.94 p99 10.24 stdev 0.89
+  display-interval histogram (ms bins): {'0-4': 1, '4-6': 1, '6-10': 4592, '10-13': 197, '13-15': 1, '15-18': 1, '25-34': 1}
+  frames never displayed / dropped: 11385  (zero-interval: 0)
+  |display - present| interval error: mean 5.88 ms, p95 7.51
+--- Where is the time going?
+CPU busy (app) p50 2.31 p99 3.28 ms | GPU time p50 1.68 p99 2.07 ms | MsInPresentAPI p50 0.09 p99 0.17
+CPUWait p50 0.09 p99 0.17
+Present->display latency p50 9.78 p99 12.58
+During spikes (n=23): CPU busy avg 8.1  GPU time avg 6.3  InPresentAPI avg 0.2  CPUWait avg 0.2
+  spike attribution: {'CPU-bound (game thread)': 23}
+  spike spacing (s): median 0.02, p25 0.01, p75 0.71  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     395   9.165250
+5.0     405   3.376208
+10.0    387  13.869625
+15.0    407   3.974125
+20.0    411   3.411042
+25.0    408   3.706208
+30.0    407   3.775542
+35.0    405   5.722875
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 48.0, 'cpu1': 73.0, 'cpu2': 36.0, 'cpu3': 18.0, 'cpu4': 7.0, 'cpu5': 3.0} | max core avg-peak: 83
+   DPC time per core avg 0.42% max 7.8% | interrupt avg 1.03% max 9.3%
+   gpu_3d: avg 22% max 24%
+   gpu_copy: avg 0% max 0%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+4056   80.3  89.9     40
+4712   61.8  71.8     40
+12212   2.1   4.5     16
+9432    2.0   3.0     12
+5608    1.8   3.0     11
+--- Host: prl_vm_app CPU avg 222% max 322% (of 1000% = 10 cores) | RSS 20846MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'Google': 45, 'launchd': 1}

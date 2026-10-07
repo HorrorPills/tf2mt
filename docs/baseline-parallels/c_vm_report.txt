@@ -1,0 +1,53 @@
+=== runs/c_vm  (10768 frames, 90.0s) ===
+Present mode: {'Composed: Flip': 10768} | SyncInterval: {-1: 10768} | Tearing: {0: 10768}
+Avg FPS 119.7  | frametime p50 8.24  p95 9.24  p99 9.88  p99.9 27.63  max 153.03 ms
+1% low 60.1 fps | 0.1% low 19.7 fps
+Frame-time spikes >2x median (16.5ms): 26 (0.24%)   >3x: 13
+Frame-to-frame jitter: mean 0.73 ms, p95 1.64, stdev of frametime 1.88
+--- Display pacing (what the monitor actually showed)
+MsBetweenDisplayChange: p50 8.33 p95 9.14 p99 9.33 stdev 1.82
+  display-interval histogram (ms bins): {'6-10': 10651, '10-13': 3, '13-15': 4, '15-18': 27, '21-25': 6, '25-34': 7, '34-50': 2, '50-100': 2, '100-1000': 1}
+  frames never displayed / dropped: 65  (zero-interval: 0)
+  |display - present| interval error: mean 0.57 ms, p95 1.37
+--- Where is the time going?
+CPU busy (app) p50 8.09 p99 9.70 ms | GPU time p50 5.35 p99 6.98 ms | MsInPresentAPI p50 0.15 p99 0.24
+CPUWait p50 0.15 p99 0.24
+Present->display latency p50 9.92 p99 14.83
+During spikes (n=26): CPU busy avg 32.7  GPU time avg 16.0  InPresentAPI avg 0.3  CPUWait avg 0.3
+  spike attribution: {'CPU-bound (game thread)': 26}
+  spike spacing (s): median 0.81, p25 0.04, p75 5.04  (tight IQR => periodic cause)
+--- per-second fps / worst frame (every 5s):
+      count        max
+sec                   
+0.0     120  12.236250
+5.0     122  10.301083
+10.0    120   9.447250
+15.0    120   9.690833
+20.0    117  27.136375
+25.0    121  10.144958
+30.0    115  44.779958
+35.0    121   9.451708
+40.0    120   9.492500
+45.0    121   9.993167
+50.0    120   9.484625
+55.0    122   9.461583
+60.0    120  10.858000
+65.0    117  27.621042
+70.0    121  13.768583
+75.0    125   9.569208
+80.0    122   9.517417
+85.0    122  11.423958
+--- Guest CPU (6 vCPU): per-core avg %: {'cpu0': 40.0, 'cpu1': 68.0, 'cpu2': 37.0, 'cpu3': 24.0, 'cpu4': 6.0, 'cpu5': 3.0} | max core avg-peak: 92
+   DPC time per core avg 0.44% max 7.8% | interrupt avg 0.99% max 9.3%
+   gpu_3d: avg 35% max 42%
+   gpu_copy: avg 0% max 17%
+--- tf_win64 hottest threads (% of one core, avg/max over time):
+       mean   max  count
+tid                     
+9984   73.2  84.9     90
+10716  54.7  70.7     90
+11920   2.3   4.6     46
+12260   2.0   4.5     37
+2088    2.0   4.5     49
+--- Host: prl_vm_app CPU avg 230% max 496% (of 1000% = 10 cores) | RSS 17727MB | swap 0.0MB | pageouts delta 0 | thermal limit min 100
+    top non-Parallels host procs: {'Google': 93, 'WindowServer': 1, 'launchd': 1}
