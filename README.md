@@ -98,6 +98,7 @@ It is on by default in the launcher (**Native Metal Renderer**); from a terminal
 
 ## Good to know
 
+* **Nothing keeps running after you're done.** When TF2 exits (however it is closed) Steam and Wine are shut down cleanly, and leftovers from crashes are cleared on the next start. Closing the launcher never interrupts a running game ([docs/session-lifetime.md](docs/session-lifetime.md)).
 * **VAC / online play:** tf2mt does not touch the game or its memory. It is a Wine configuration, like Proton on
   Linux/Steam Deck. The Wine patch changes Wine's mouse handling, not TF2.
 * **Nothing from Valve is redistributed.** Steam and TF2 are downloaded from Valve into your folder. The launcher

@@ -3,6 +3,10 @@
 . "$(dirname "$0")/_env.sh"
 notify() { osascript -e "display notification \"$1\" with title \"Team Fortress 2\"" >/dev/null 2>&1; }
 if tf2_running; then notify "TF2 is already running."; exit 0; fi
+RUN="$TF2_HOME/run"; mkdir -p "$RUN"
+# a session that is still shutting down (quit + Play right away) must finish first, or it would close our Steam
+for _ in $(seq 45); do p=$(cat "$RUN/teardown.lock/pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null || break; sleep 1; done
+echo $$ > "$RUN/launch-pending"; trap 'rm -f "$RUN/launch-pending"' EXIT   # tells session-helper.sh a launch is in progress
 if ! steam_running; then
   n=$(wc -l < "$STEAM_DIR/logs/connection_log.txt" 2>/dev/null || echo 0)
   notify "Starting Steam…"

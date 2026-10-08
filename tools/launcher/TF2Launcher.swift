@@ -45,19 +45,93 @@ func scriptEnv(_ extra: [String: String] = [:], removing: [String] = []) -> [Str
     return env
 }
 
+/// Start a process in its own session (survives the launcher quitting). Output lines go to `onOutput` (if given),
+/// `onExit` gets the exit code. Returns false if it could not be started.
+@discardableResult
+func spawnDetached(_ args: [String], env: [String: String]? = nil,
+                   onOutput: ((String) -> Void)? = nil, onExit: ((Int32) -> Void)? = nil) -> Bool {
+    var fds: [Int32] = [0, 0]
+    let capture = onOutput != nil
+    if capture && pipe(&fds) != 0 { return false }
+    var fa: posix_spawn_file_actions_t? = nil
+    posix_spawn_file_actions_init(&fa)
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)
+    if capture {
+        posix_spawn_file_actions_adddup2(&fa, fds[1], 1); posix_spawn_file_actions_adddup2(&fa, fds[1], 2)
+        posix_spawn_file_actions_addclose(&fa, fds[0]); posix_spawn_file_actions_addclose(&fa, fds[1])
+    } else {
+        posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0)
+    }
+    var attr: posix_spawnattr_t? = nil
+    posix_spawnattr_init(&attr)
+    posix_spawnattr_setflags(&attr, Int16(0x0400))   // POSIX_SPAWN_SETSID
+    let environment = env ?? scriptEnv()
+    var argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) } + [nil]
+    var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    var pid: pid_t = 0
+    let rc = posix_spawn(&pid, args[0], &fa, &attr, &argv, &envp)
+    argv.forEach { free($0) }; envp.forEach { free($0) }
+    posix_spawn_file_actions_destroy(&fa); posix_spawnattr_destroy(&attr)
+    if capture { close(fds[1]) }
+    guard rc == 0 else { if capture { close(fds[0]) }; return false }
+    let readFD = capture ? fds[0] : -1
+    DispatchQueue.global(qos: .utility).async {
+        if readFD >= 0, let onOutput {
+            let h = FileHandle(fileDescriptor: readFD, closeOnDealloc: true)
+            var pending = ""
+            while true {
+                let d = h.availableData
+                if d.isEmpty { break }
+                pending += String(decoding: d, as: UTF8.self)
+                while let nl = pending.firstIndex(of: "\n") {
+                    let line = String(pending[..<nl]); pending = String(pending[pending.index(after: nl)...])
+                    if !line.isEmpty { onOutput(line) }
+                }
+            }
+            if !pending.isEmpty { onOutput(pending) }
+        }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+        onExit?((status & 0x7f) == 0 ? (status >> 8) & 0xff : -1)
+    }
+    return true
+}
+
 @discardableResult
 func shell(_ args: [String], env: [String: String]? = nil) -> (status: Int32, output: String) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: args[0])
-    p.arguments = Array(args.dropFirst())
-    p.environment = env ?? scriptEnv()
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = pipe
-    do { try p.run() } catch { return (-1, "\(error)") }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+    // Every script runs in its own session (POSIX_SPAWN_SETSID). macOS kills an app's whole process group when the
+    // app quits; without this, quitting the launcher killed Steam, Wine and TF2 abruptly and left orphaned Wine
+    // processes behind (v0.3.0 and older). Output (stdout + stderr) is captured as before.
+    var fds: [Int32] = [0, 0]
+    guard pipe(&fds) == 0 else { return (-1, "pipe failed") }
+    var fa: posix_spawn_file_actions_t? = nil
+    posix_spawn_file_actions_init(&fa)
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)
+    posix_spawn_file_actions_adddup2(&fa, fds[1], 1)
+    posix_spawn_file_actions_adddup2(&fa, fds[1], 2)
+    posix_spawn_file_actions_addclose(&fa, fds[0])
+    posix_spawn_file_actions_addclose(&fa, fds[1])
+    var attr: posix_spawnattr_t? = nil
+    posix_spawnattr_init(&attr)
+    posix_spawnattr_setflags(&attr, Int16(0x0400))   // POSIX_SPAWN_SETSID (sys/spawn.h)
+    let environment = env ?? scriptEnv()
+    var argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) } + [nil]
+    var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    defer {
+        argv.forEach { free($0) }; envp.forEach { free($0) }
+        posix_spawn_file_actions_destroy(&fa); posix_spawnattr_destroy(&attr)
+    }
+    var pid: pid_t = 0
+    let rc = posix_spawn(&pid, args[0], &fa, &attr, &argv, &envp)
+    close(fds[1])
+    let reader = FileHandle(fileDescriptor: fds[0], closeOnDealloc: true)
+    guard rc == 0 else { return (-1, "spawn failed: \(String(cString: strerror(rc)))") }
+    let data = reader.readDataToEndOfFile()
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+    let code: Int32 = (status & 0x7f) == 0 ? (status >> 8) & 0xff : -1
+    return (code, String(decoding: data, as: UTF8.self))
 }
 
 // MARK: - Valve art & fonts from the user's install (never bundled)
@@ -144,6 +218,8 @@ final class Launcher: ObservableObject {
 
     init() {
         registerGameFonts()
+        Session.markLauncherRunning()
+        Task.detached { Session.ensureHelper() }
         refresh()
         refreshMouseFix(); refreshComfig()
         refreshChecks()
@@ -172,6 +248,8 @@ final class Launcher: ObservableObject {
             await MainActor.run {
                 self.tf2Running = tf2
                 self.steam = steamUp ? (loggedOn ? .online : .starting) : .stopped
+                // the "Starting Steam…" message comes from the button press: keep it in step with the live state
+                if self.message == "Starting Steam…" && self.steam == .online { self.message = "Steam is online." }
                 if tf2 { self.launching = false }
             }
         }
@@ -239,33 +317,24 @@ final class Launcher: ObservableObject {
     // MARK: setup
 
     func runSetup(runtimeFile: String? = nil) {
+        Session.ensureHelper()
         guard !setupRunning else { return }
         setupRunning = true
         setupLog = []
         var args = ["/bin/bash", Paths.script("setup.sh")]
         if let runtimeFile { args += ["--runtime", runtimeFile] }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: args[0])
-        p.arguments = Array(args.dropFirst())
-        p.environment = scriptEnv()
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        pipe.fileHandleForReading.readabilityHandler = { h in
-            let text = String(decoding: h.availableData, as: UTF8.self)
-            let lines = text.split(separator: "\n").map(String.init)
-            if !lines.isEmpty { Task { @MainActor in self.setupLog += lines } }
-        }
-        p.terminationHandler = { proc in
-            pipe.fileHandleForReading.readabilityHandler = nil
+        // own session (spawnDetached): Steam started by setup must survive the launcher quitting
+        let started = SessionRunner.run(Array(args.dropFirst()), env: scriptEnv(), onOutput: { line in
+            Task { @MainActor in self.setupLog.append(line) }
+        }, onExit: { code in
             Task { @MainActor in
                 self.setupRunning = false
-                self.message = proc.terminationStatus == 0 ? "Setup finished." : "Setup stopped — see the log above."
+                self.message = code == 0 ? "Setup finished." : "Setup stopped — see the log above."
                 registerGameFonts(); self.artVersion += 1
                 self.refreshMouseFix(); self.refreshComfig(); self.refresh()
             }
-        }
-        do { try p.run() } catch { setupRunning = false; setupLog = ["FAIL \(error)"] }
+        })
+        if !started { setupRunning = false; setupLog = ["FAIL couldn't start setup.sh"] }
     }
 
     /// Runtime URL configured for this release (config/release.conf), if any.
@@ -283,13 +352,15 @@ final class Launcher: ObservableObject {
     }
 
     func loginSteam() {
+        Session.ensureHelper()
         message = "Opening Steam — sign in, then come back here."
-        Task.detached { shell(["/bin/bash", Paths.script("steam.sh"), "--login"], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
+        Task.detached { SessionRunner.runSync([Paths.script("steam.sh"), "--login"], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
     }
 
     func installTF2() {
+        Session.ensureHelper()
         Task.detached {
-            let r = shell(["/bin/bash", Paths.script("install-tf2.sh")])
+            let r = SessionRunner.runSync([Paths.script("install-tf2.sh")])
             await MainActor.run { self.message = r.output.trimmingCharacters(in: .whitespacesAndNewlines) }
         }
     }
@@ -326,6 +397,7 @@ final class Launcher: ObservableObject {
         refreshChecks()
         guard readyToPlay else { message = "Setup incomplete — see the Setup tab."; return }
         launching = true
+        Session.ensureHelper()
         message = steam == .online ? "Starting Team Fortress 2…" : "Starting Steam — waiting for login…"
         var extra = ["DXVK_CONFIG_FILE": pacing.dxvkConfig, "TF2_FRIENDS_ONLINE": friendsOffline ? "0" : "1"]
         if hud { extra["MTL_HUD_ENABLED"] = "1" }
@@ -338,7 +410,7 @@ final class Launcher: ObservableObject {
         Task.detached {
             if firstPreset { shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", "low"]) }
             try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
-            let r = shell(args, env: env)
+            let r = SessionRunner.runSync(Array(args.dropFirst()), env: env)   // args[0] is /bin/bash
             let logURL = URL(fileURLWithPath: Paths.logs + "/launcher.log")
             if let h = try? FileHandle(forWritingTo: logURL) {
                 h.seekToEndOfFile(); h.write(Data(("=== tf2mt launcher \(Date())\n" + r.output).utf8)); try? h.close()
@@ -364,9 +436,10 @@ final class Launcher: ObservableObject {
     }
 
     func startSteam() {
+        Session.ensureHelper()
         if !everLoggedIn { loginSteam(); return }
         message = "Starting Steam…"
-        Task.detached { shell(["/bin/bash", Paths.script("steam.sh")], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
+        Task.detached { SessionRunner.runSync([Paths.script("steam.sh")], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
     }
 
     func openLogs() {
@@ -376,6 +449,105 @@ final class Launcher: ObservableObject {
 }
 
 // MARK: - style
+
+// MARK: - session lifetime
+// Steam and Wine must never outlive a play session (they kept running invisibly before v0.3.1). The launcher starts
+// scripts/session-helper.sh (bundled; runs only while a session exists) before any Steam/TF2 action and on start.
+// The helper ends the session when TF2 has exited, or when the launcher is gone and no game runs: so the order or
+// way things are closed (in game, Dock, force quit, crash) doesn't matter. The launcher itself never blocks on quit.
+enum Session {
+    static var runDir: String { Paths.game + "/run" }
+    static var launcherPidFile: String { runDir + "/launcher.pid" }
+    static func markLauncherRunning() {
+        try? FileManager.default.createDirectory(atPath: runDir, withIntermediateDirectories: true)
+        try? "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: launcherPidFile, atomically: true, encoding: .utf8)
+    }
+    static func markLauncherGone() {
+        // only remove our own pid (a second launcher instance may have taken over)
+        if let s = try? String(contentsOfFile: launcherPidFile, encoding: .utf8),
+           s.trimmingCharacters(in: .whitespacesAndNewlines) == "\(ProcessInfo.processInfo.processIdentifier)" {
+            try? FileManager.default.removeItem(atPath: launcherPidFile)
+        }
+    }
+    /// Start the session helper unless one is running. Returns at once.
+    static func ensureHelper() {
+        guard exists(Paths.script("session-helper.sh")) else { return }
+        SessionRunner.runSync([Paths.script("session-helper.sh"), "--spawn"])
+    }
+}
+
+/// Runs tf2mt scripts through the invisible "tf2mt Session" app (Contents/Helpers), opened via LaunchServices.
+/// macOS 27 attributes processes to the app that started them: Steam/Wine/TF2 started by the launcher itself kept
+/// tf2mt in the Dock as "running in background" after quitting (and "Stop Running in Background" killed the game).
+/// Started by the Session app (which exits right after its script), they belong to no visible app.
+enum SessionRunner {
+    static var appPath: String { Bundle.main.bundlePath + "/Contents/Helpers/tf2mt Session.app" }
+    static var available: Bool { exists(appPath + "/Contents/MacOS/tf2mt-session") }
+
+    /// `bash <scriptArgs>` with the tf2mt environment. Output lines -> onOutput, exit code -> onExit (background
+    /// thread). Returns false if it couldn't be started.
+    @discardableResult
+    static func run(_ scriptArgs: [String], env: [String: String] = scriptEnv(),
+                    onOutput: ((String) -> Void)? = nil, onExit: ((Int32) -> Void)? = nil) -> Bool {
+        guard available else {   // dev build without the helper app
+            return spawnDetached(["/bin/bash"] + scriptArgs, env: env, onOutput: onOutput ?? { _ in }, onExit: onExit)
+        }
+        let dir = Session.runDir
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let out = dir + "/req-\(UUID().uuidString).log"
+        FileManager.default.createFile(atPath: out, contents: nil)
+        var openArgs = ["/usr/bin/open", "-n", "-g", "-j"]
+        var e = env.filter { k, _ in ["TF2", "DXVK", "MTL_", "WINE", "MVK", "DYLD"].contains { k.hasPrefix($0) } }
+        e["TF2MT_OUT"] = out
+        e["TF2_HOME"] = Paths.game
+        for (k, v) in e { openArgs += ["--env", "\(k)=\(v)"] }
+        openArgs += [appPath, "--args"] + scriptArgs
+        guard shell(openArgs).status == 0 else { try? FileManager.default.removeItem(atPath: out); return false }
+        DispatchQueue.global(qos: .utility).async {
+            guard let h = FileHandle(forReadingAtPath: out) else { onExit?(-1); return }
+            var pending = ""
+            func drain() {
+                let d = h.readDataToEndOfFile()
+                guard !d.isEmpty else { return }
+                pending += String(decoding: d, as: UTF8.self)
+                while let nl = pending.firstIndex(of: "\n") {
+                    let line = String(pending[..<nl]); pending = String(pending[pending.index(after: nl)...])
+                    if !line.isEmpty { onOutput?(line) }
+                }
+            }
+            let deadline = Date().addingTimeInterval(4 * 3600)
+            while !exists(out + ".status") && Date() < deadline { drain(); usleep(200_000) }
+            drain(); if !pending.isEmpty { onOutput?(pending) }
+            let code = Int32(((try? String(contentsOfFile: out + ".status", encoding: .utf8)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+            try? h.close()
+            try? FileManager.default.removeItem(atPath: out); try? FileManager.default.removeItem(atPath: out + ".status")
+            onExit?(code)
+        }
+        return true
+    }
+
+    /// Same, waiting for the result (call off the main thread).
+    static func runSync(_ scriptArgs: [String], env: [String: String] = scriptEnv()) -> (status: Int32, output: String) {
+        let done = DispatchSemaphore(value: 0)
+        var lines: [String] = []; var code: Int32 = -1
+        let lock = NSLock()
+        guard run(scriptArgs, env: env, onOutput: { l in lock.lock(); lines.append(l); lock.unlock() },
+                  onExit: { c in code = c; done.signal() }) else { return (-1, "couldn't start \(scriptArgs.first ?? "")") }
+        done.wait()
+        return (code, lines.joined(separator: "\n"))
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // hand the session to the helper and quit immediately (Dock Quit, Cmd-Q, closing the window, updater)
+        Session.markLauncherGone()
+        Session.ensureHelper()
+        return .terminateNow
+    }
+}
 
 // MARK: - auto-update (GitHub releases)
 // Checks the latest GitHub release, downloads tf2mt-app.zip, verifies it against the SHA-256 digest GitHub publishes
@@ -509,11 +681,8 @@ final class Updater: ObservableObject {
             rm -rf "\(work)"
             """
             do { try script.write(toFile: helper, atomically: true, encoding: .utf8) } catch { return fail("Couldn't prepare the update.") }
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/bash")
-            p.arguments = [helper, dest, app]
-            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-            do { try p.run() } catch { return fail("Couldn't start the update helper.") }
+            // own session: macOS kills the launcher's process group when it quits, which would take the swap with it
+            if !spawnDetached(["/bin/bash", helper, dest, app]) { return fail("Couldn't start the update helper.") }
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }.resume()
     }
@@ -938,6 +1107,7 @@ struct ContentView: View {
 
 @main
 struct TF2LauncherApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     var body: some Scene {
         WindowGroup("tf2mt") {
             ContentView().preferredColorScheme(.dark)

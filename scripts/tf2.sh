@@ -12,6 +12,7 @@ steam_url() { (cd "$STEAM_DIR" && "$WINE" steam.exe "$1" >/dev/null 2>&1); }
 friends_offline=0
 if [ "${TF2_FRIENDS_ONLINE:-0}" != 1 ] && [ "${TF2_TUNED:-1}" = 1 ] && pgrep -f steamwebhelper >/dev/null; then
   steam_url steam://friends/status/offline; friends_offline=1
+  mkdir -p "$TF2_HOME/run"; touch "$TF2_HOME/run/friends-offline"   # session-end.sh restores it
   sleep 5   # let the status flip settle before the game starts listening
 fi
 
@@ -67,7 +68,13 @@ if [ $friends_offline = 1 ]; then   # restore Friends when the game is gone
   (
     for _ in $(seq 120); do tf2_running && break; sleep 1; done
     while tf2_running; do sleep 5; done
-    steam_url steam://friends/status/online
+    # the launcher's session helper (session-end.sh) restores Friends and shuts Steam down; this is only the
+    # fallback for terminal use. Never start Steam just for this (that left a background Steam running).
+    sleep 4
+    h=$(cat "$TF2_HOME/run/helper.pid" 2>/dev/null)
+    if ! { [ -n "$h" ] && kill -0 "$h" 2>/dev/null; } && [ -f "$TF2_HOME/run/friends-offline" ] && steam_running; then
+      steam_url steam://friends/status/online; rm -f "$TF2_HOME/run/friends-offline"
+    fi
   ) >/dev/null 2>&1 &
   disown
   echo "tf2 started (Friends set offline until TF2 exits; TF2_FRIENDS_ONLINE=1 to keep online) (log: $TF2_HOME/logs/tf2.log)"

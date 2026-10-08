@@ -1,12 +1,13 @@
 # tf2mt — status and handoff (read this first)
 
-Last updated 2026-10-08 (v0.3.0 prepared: low-latency pacing + launcher auto-updater). Owner rules: do **not** commit or push to GitHub unless the owner asks. The agent never
+Last updated 2026-10-08 (v0.3.1: Steam/Wine shut down after every session; see docs/session-lifetime.md). Owner rules: do **not** commit or push to GitHub unless the owner asks. The agent never
 joins online servers itself; online tests are played by the owner (see "Safety").
 
 ## Where things stand
 | Track | State |
 |---|---|
-| **Next release (v0.3.0, prepared)** | Low-latency pacing default (game ahead 0, 2 drawables; frame start → on screen ~41 → ~25–31 ms, `latency:` lines in unix.log, docs/mouse-input.md) and an in-app auto-updater (GitHub latest release, SHA-256 digest check, in-place swap; README "Updates"). |
+| **v0.3.1** | Session lifetime: invisible Session app starts Steam/TF2 (macOS 27 background attribution), per-session helper + teardown + orphan sweep; all 6 quit paths owner-tested (docs/session-lifetime.md). |
+| **v0.3.0** | Low-latency pacing default (game ahead 0, 2 drawables; frame start → on screen ~41 → ~25–31 ms, `latency:` lines in unix.log, docs/mouse-input.md) and an in-app auto-updater (GitHub latest release, SHA-256 digest check, in-place swap; README "Updates"). |
 | **Released app (v0.2.0)** | Public at github.com/HorrorPills/tf2mt. Native Metal renderer on by default, mastercomfig Low default (installed on first Play), mouse fix + Friends-offline on, launcher tabs Settings/Setup/Debug. Setup needs nothing beyond stock macOS (mouse patch tool is bash since v0.2.0). v0.1.0: DXVK-only. |
 | **Renderer M0** (Phase 0) | Done: `docs/phase0-report.md`, gate G0 passed |
 | **Renderer M1** (census) | Done: `docs/census-summary.md` (scope), `docs/census-report.md` (tables), ADR-001 (SM2 path first). Corpus: `corpus/*.bin` 1,190 live shaders + `corpus/vcs/` 318,788 extracted (git-ignored; regenerate with `tools/census/vcs.py`) |

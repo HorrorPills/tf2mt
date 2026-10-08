@@ -43,6 +43,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# invisible session helper app (macOS 27: Steam/Wine/TF2 must not be attributed to the launcher, see TF2Session.swift)
+SES="$APP/Contents/Helpers/tf2mt Session.app"; mkdir -p "$SES/Contents/MacOS"
+swiftc -O -target arm64-apple-macos13 session/TF2Session.swift -o "$SES/Contents/MacOS/tf2mt-session"
+cat > "$SES/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>tf2mt Session</string>
+  <key>CFBundleIdentifier</key><string>local.tf2mt.session</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>tf2mt-session</string>
+  <key>LSUIElement</key><true/>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict></plist>
+PLIST
 codesign -f -s - --deep "$APP" >/dev/null 2>&1
 (cd "$OUT" && ditto -c -k --keepParent tf2mt.app tf2mt-app.zip)   # release asset
 echo "built $APP  (+ $OUT/tf2mt-app.zip)"
