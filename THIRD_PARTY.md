@@ -12,7 +12,7 @@ except where noted:
 | DXMT | 0.80 | see upstream | https://github.com/3Shain/dxmt |
 | vkd3d | bundled with Wine | LGPL-2.1-or-later | https://gitlab.winehq.org/wine/vkd3d |
 
-**Modification:** on the user's machine, `tools/wine-patches/winemac_warp_nodiscard.py` binary-patches two
+**Modification:** on the user's machine, `tools/wine-patches/winemac_warp_nodiscard.sh` binary-patches two
 instructions in Wine's `winemac.so` (see `docs/mouse-input.md`). The shipped runtime is unmodified; the patch is
 applied locally and can be reverted. The corresponding Wine source is `dlls/winemac.drv/cocoa_app.m`,
 `-[WineApplicationController setCursorPosition:]`, in Wine 10.0.

@@ -15,13 +15,11 @@
 #include <stdio.h>
 #include <wchar.h>
 #include "methods.h"
+#include "ifaces.h"
+#include "trace_common.h"
 
-extern void *d3d_thunks[D3D_NMETHODS];
-extern void *dev_thunks[DEV_NMETHODS];
 uint64_t d3d_calls[D3D_NMETHODS];
 uint64_t dev_calls[DEV_NMETHODS];
-
-typedef struct { void **vtbl; IUnknown *inner; } wrap_t;
 
 static void *d3d_vtbl[D3D_NMETHODS], *dev_vtbl[DEV_NMETHODS];
 static HMODULE ref_dll;
@@ -31,6 +29,7 @@ static HANDLE out_csv = INVALID_HANDLE_VALUE, out_info = INVALID_HANDLE_VALUE;
 static char csv_buf[1 << 20];
 static size_t csv_len;
 static LARGE_INTEGER qpf, t0, last_present;
+static uint64_t last_draws_census;
 static uint64_t frame_no, last_draws, last_calls, last_thread_cpu, last_proc_cpu;
 static uint64_t prev_dev_calls[DEV_NMETHODS];   /* per-frame deltas for the slow-frame profile */
 /* camera-change detection: Source passes the view-projection matrix in VS constants c8..c11. We hash it at
@@ -45,7 +44,7 @@ static void write_all(HANDLE h, const char *p, size_t n)
     while (n && WriteFile(h, p, (DWORD)n, &w, NULL) && w) { p += w; n -= w; }
 }
 
-static void info(const char *fmt, ...)
+void info(const char *fmt, ...)
 {
     char b[2048];
     va_list ap; va_start(ap, fmt);
@@ -67,9 +66,9 @@ static HANDLE open_out(const char *dir, const char *tag, const char *suffix)
     return CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
+static char dir[MAX_PATH] = "Z:\\tmp", tag[128] = "untagged";
 static void log_open(void)
 {
-    char dir[MAX_PATH] = "Z:\\tmp", tag[128] = "untagged";
     GetEnvironmentVariableA("TF2MT_TRACE_DIR", dir, sizeof dir);
     if (!GetEnvironmentVariableA("TF2MT_TAG", tag, sizeof tag))
         snprintf(tag, sizeof tag, "%lu", GetCurrentProcessId());
@@ -144,6 +143,8 @@ static void record_frame(LARGE_INTEGER start, LARGE_INTEGER end)
     last_present = start; last_draws = draws; last_calls = calls;
     last_thread_cpu = tcpu; last_proc_cpu = pcpu;
     if (csv_len > (64u << 10)) flush_csv(); /* ~700 frames; one WriteFile */
+    census_frame(draws - last_draws_census);
+    last_draws_census = draws;
     LeaveCriticalSection(&log_lock);
 }
 
@@ -154,7 +155,6 @@ static wrap_t *wrap(void **vtbl, IUnknown *inner)
     w->vtbl = vtbl; w->inner = inner;
     return w;
 }
-#define INNER(T, w) ((T *)((wrap_t *)(w))->inner)
 
 /* device */
 static HRESULT WINAPI dev_QueryInterface(IDirect3DDevice9Ex *self, REFIID riid, void **out)
@@ -178,6 +178,8 @@ static ULONG WINAPI dev_Release(IDirect3DDevice9Ex *self)
     if (!r) {
         EnterCriticalSection(&log_lock); flush_csv(); LeaveCriticalSection(&log_lock);
         info("device released after %llu frames\n", (unsigned long long)frame_no);
+        census_dump();
+        capture_close();
         dump_call_counts();
         HeapFree(GetProcessHeap(), 0, self);
     }
@@ -188,6 +190,7 @@ static HRESULT WINAPI dev_Present(IDirect3DDevice9Ex *self, const RECT *src, con
 {
     LARGE_INTEGER a, b;
     dev_calls[DEV_Present]++;
+    if (census_enabled()) census_hit((1u << 16) | DEV_Present);
     QueryPerformanceCounter(&a);
     HRESULT hr = IDirect3DDevice9Ex_Present(INNER(IDirect3DDevice9Ex, self), src, dst, wnd, dirty);
     QueryPerformanceCounter(&b);
@@ -256,6 +259,12 @@ static HRESULT WINAPI d3d_GetAdapterIdentifier(IDirect3D9Ex *self, UINT adapter,
     d3d_calls[D3D_GetAdapterIdentifier]++;
     HRESULT hr = IDirect3D9Ex_GetAdapterIdentifier(INNER(IDirect3D9Ex, self), adapter, flags, id);
     static int once;
+    if (SUCCEEDED(hr) && !once) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof path, "%s\\adapter-%s.bin", dir, tag);
+        HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) { write_all(h, (const char *)id, sizeof *id); CloseHandle(h); }
+    }
     if (SUCCEEDED(hr) && !once++)
         info("adapter %u: '%s' driver '%s' vendor 0x%04lx device 0x%04lx subsys 0x%08lx rev %lu\n", adapter,
              id->Description, id->Driver, id->VendorId, id->DeviceId, id->SubSysId, id->Revision);
@@ -344,7 +353,10 @@ static BOOL init_once(void)
     dev_vtbl[DEV_SetVertexShaderConstantF] = dev_SetVertexShaderConstantF;
     dev_vtbl[DEV_ResetEx] = dev_ResetEx;
 
-    CloseHandle(CreateThread(NULL, 0, timer_probe, NULL, 0, NULL));
+    census_install(d3d_vtbl, dev_vtbl, dir, tag);
+    capture_install(d3d_vtbl, dev_vtbl, dir, tag);
+    info("mode: %s\n", census_enabled() ? "census" : capture_on ? "capture" : "timing");
+    if (!census_enabled() && !capture_on) CloseHandle(CreateThread(NULL, 0, timer_probe, NULL, 0, NULL));
     ok = ref_dll != NULL;
     InitOnceComplete(&once, 0, NULL);
     return ok;
@@ -375,6 +387,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(inst);
     if (reason == DLL_PROCESS_DETACH && out_csv != INVALID_HANDLE_VALUE) {
         flush_csv();
+        census_dump();
+        capture_close();
         dump_call_counts();
     }
     return TRUE;

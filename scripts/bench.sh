@@ -3,6 +3,7 @@
 #   scripts/bench.sh <tag> <ref> [extra launch args...]
 #   <ref>: dxvk  (runtime DXVK 2.4.1 behind the timing proxy)
 #          null  (build/null/d3d9.dll behind the timing proxy: game-only ceiling)
+#          tf2mt (the tf2mt renderer behind the timing proxy; layer installed for the run, removed afterwards)
 # Env passthrough: anything exported (DXVK_*, MVK_*, WINE*) reaches the game.
 # Output: ~/Games/tf2/logs/runs/<tag>/{frames-<tag>.csv,.info.txt,threads-<tag>.csv,console.log,args.txt,report.txt,report.json}
 # Validity: the display must be awake and the session unlocked for the whole run (a sleeping/locked
@@ -17,12 +18,20 @@ run="$TF2_HOME/logs/runs/$tag"
 state=$("$TF2MT_ROOT/build/tools/displaystate") || { echo "refusing to run: $state (display asleep or screen locked)"; exit 1; }
 mkdir -p "$run"
 caffeinate -d -w $$ &
-cleanup() { rm -f "$TF2DIR/d3d9.dll" "$TF2DIR/d3d9_ref.dll" "$TF2DIR/d3d9_oracle.dll"; }  # leave the game folder clean
+cleanup() {   # leave the game folder (and, for tf2mt, the runtime) clean
+  rm -f "$TF2DIR/d3d9.dll" "$TF2DIR/d3d9_ref.dll" "$TF2DIR/d3d9_oracle.dll"
+  [ "$ref" = tf2mt ] && "$TF2MT_ROOT/scripts/layer-uninstall.sh" >/dev/null
+}
 trap cleanup EXIT
 
 case $ref in
   dxvk) src="$TF2_HOME/wine/share/dxvk/x86_64-windows/d3d9.dll" ;;
   null) src="$TF2MT_ROOT/build/null/d3d9.dll" ;;
+  tf2mt)
+    make -C "$TF2MT_ROOT" -s frontend unixlib trace
+    "$TF2MT_ROOT/scripts/layer-install.sh" >/dev/null
+    src="$TF2MT_ROOT/build/tf2mt/d3d9.dll"     # forwarder -> builtin tf2mt.dll
+    export TF2MT_UNIX_LOG="$run/unix.log" ;;
   *) echo "unknown ref '$ref'"; exit 1 ;;
 esac
 cp "$TF2MT_ROOT/build/trace/d3d9.dll" "$TF2DIR/d3d9.dll"
@@ -36,7 +45,7 @@ pgrep -f steamwebhelper >/dev/null || { "$TF2MT_ROOT/scripts/steam.sh"; }
 until tail -n 30 "$STEAM_DIR/logs/connection_log.txt" 2>/dev/null | grep -q 'Logged On'; do sleep 2; done
 
 : > "$TF2DIR/tf/console.log"
-args=(-condebug -windowed -noborder -w 1920 -h 1080 "$@" +demo_quitafterplayback 1 +playdemo bench)
+args=(-insecure -condebug -windowed -noborder -w 1920 -h 1080 "$@" +demo_quitafterplayback 1 +playdemo bench)
 printf '%s\n' "ref=$ref" "args=${args[*]}" > "$run/args.txt"
 env | grep -E '^(DXVK_|MVK_|WINE[A-Z]*SYNC|TF2MT_)' >> "$run/args.txt"
 echo "display_start=$state" >> "$run/args.txt"

@@ -1,0 +1,10 @@
+# M7 golden set: capture tag <TAB> frames (Present numbers) compared tf2mt vs DXVK, SSIM >= 0.995 required.
+# Captures live in ~/Games/tf2/cache/traces/<tag>/ (tools/replay/capture.sh <tag> <scenario>).
+m5-harvest	150,600,2400
+m5-loadout	150,1000,3300,3450
+m5-mapchange	300,2000,4500
+m6-demo	120,400,700,880,1050
+m7-hdr2	1500,3000,4000
+m7-msaa4	200,350
+m7-high	600,1000,1300
+m7-reset	2100,2200,2350

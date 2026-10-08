@@ -6,3 +6,5 @@ corpus/*.bin
 .DS_Store
 __pycache__/
 *.pyc
+corpus/vcs/
+*.dxvk-cache

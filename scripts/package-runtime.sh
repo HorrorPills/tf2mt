@@ -10,7 +10,7 @@ stage="$(mktemp -d)"; trap 'rm -rf "$stage"' EXIT
 cp -cR "$TF2_HOME/wine" "$stage/wine"              # APFS clone: instant, no extra space
 orig="$TF2_HOME/backups/winemac.so.orig"
 if [ -f "$orig" ]; then cp "$orig" "$stage/wine/lib/wine/x86_64-unix/winemac.so"; fi
-TF2_HOME="$stage" /usr/bin/python3 "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.py" status | grep -q '^original' \
+TF2_HOME="$stage" /bin/bash "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.sh" status | grep -q '^original' \
   || { echo "staged winemac.so is not the original build — refusing to package"; exit 1; }
 cp "$TF2MT_ROOT/THIRD_PARTY.md" "$stage/wine/THIRD_PARTY.md"
 echo "packing $name (xz, may take a few minutes)…"

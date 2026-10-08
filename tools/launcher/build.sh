@@ -14,6 +14,17 @@ iconutil -c icns "$OUT/tf2mt.iconset" -o "$RES/tf2mt.icns"
 cp -R "$ROOT/scripts" "$ROOT/config" "$RES/tf2mt/"
 cp -R "$ROOT/tools/wine-patches" "$RES/tf2mt/tools/"
 cp "$ROOT/THIRD_PARTY.md" "$RES/tf2mt/"
+# experimental Metal renderer (M10): prebuilt layer files, installed per session by scripts/tf2.sh (TF2_RENDERER=tf2mt)
+if make -C "$ROOT" -s frontend unixlib >/dev/null 2>&1; then
+  mkdir -p "$RES/tf2mt/build/tf2mt"
+  cp "$ROOT/build/tf2mt/tf2mt.dll" "$ROOT/build/tf2mt/tf2mt.so" "$ROOT/build/tf2mt/d3d9.dll" "$RES/tf2mt/build/tf2mt/"
+else
+  echo "WARNING: Metal renderer build failed; the app will fall back to DXVK" >&2
+fi
+# frame-time recording proxy for DXVK sessions (TF2_FRAMELOG=1, launcher Debug tab)
+if make -C "$ROOT" -s trace >/dev/null 2>&1 && [ -f "$ROOT/build/trace/d3d9.dll" ]; then
+  mkdir -p "$RES/tf2mt/build/trace"; cp "$ROOT/build/trace/d3d9.dll" "$RES/tf2mt/build/trace/"
+fi
 find "$RES/tf2mt" -name '__pycache__' -prune -exec rm -rf {} +
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

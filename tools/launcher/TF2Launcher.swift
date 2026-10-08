@@ -20,7 +20,7 @@ enum Paths {
     }
     static var game: String { UserDefaults.standard.string(forKey: "gameHome") ?? home + "/Games/tf2" }
     static var script: (String) -> String { { repo + "/scripts/" + $0 } }
-    static var mousePatch: String { repo + "/tools/wine-patches/winemac_warp_nodiscard.py" }
+    static var mousePatch: String { repo + "/tools/wine-patches/winemac_warp_nodiscard.sh" }
     static var releaseConf: String { repo + "/config/release.conf" }
     static var logs: String { game + "/logs" }
     static var wine: String { game + "/wine/bin/wine" }
@@ -127,6 +127,8 @@ final class Launcher: ObservableObject {
     @Published var tf2Running = false
     @Published var launching = false
     @Published var mouseFix: MouseFix = .unknown
+    @Published var comfigPreset = "none"       // mastercomfig preset from setup_hook.cfg ("none" = not set)
+    @Published var comfigInstalled = false
     @Published var checks: [SetupCheck] = []
     @Published var message: String?
     @Published var setupRunning = false
@@ -143,7 +145,7 @@ final class Launcher: ObservableObject {
     init() {
         registerGameFonts()
         refresh()
-        refreshMouseFix()
+        refreshMouseFix(); refreshComfig()
         refreshChecks()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -175,12 +177,36 @@ final class Launcher: ObservableObject {
         }
     }
 
+    func refreshComfig() {
+        Task.detached {
+            let out = shell(["/bin/bash", Paths.script("mastercomfig.sh"), "status"]).output
+            let preset = out.components(separatedBy: "preset=").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "none"
+            await MainActor.run { self.comfigInstalled = out.contains("installed=yes"); self.comfigPreset = preset.isEmpty ? "none" : preset }
+        }
+    }
+
+    func setComfig(_ preset: String) {
+        guard preset != comfigPreset, preset != "none" else { return }
+        comfigPreset = preset
+        message = comfigInstalled ? "Switching mastercomfig to \(preset.capitalized)…" : "Downloading mastercomfig from GitHub…"
+        Task.detached {
+            let r = shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", preset])
+            await MainActor.run {
+                let out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.message = r.status == 0
+                    ? "mastercomfig \(preset.capitalized) selected" + (self.tf2Running ? " — restart TF2 to apply." : " — applies on next launch.")
+                    : "mastercomfig: " + out
+                self.refreshComfig()
+            }
+        }
+    }
+
     func refreshMouseFix() {
         Task.detached {
             guard exists(Paths.mousePatch), exists(Paths.wine) else {
                 await MainActor.run { self.mouseFix = .unknown; self.refreshChecks() }; return
             }
-            let out = shell(["/usr/bin/python3", Paths.mousePatch, "status"]).output
+            let out = shell(["/bin/bash", Paths.mousePatch, "status"]).output
             let state: MouseFix = out.hasPrefix("patched") ? .applied : out.hasPrefix("original") ? .original : .unknown
             await MainActor.run { self.mouseFix = state; self.refreshChecks() }
         }
@@ -236,7 +262,7 @@ final class Launcher: ObservableObject {
                 self.setupRunning = false
                 self.message = proc.terminationStatus == 0 ? "Setup finished." : "Setup stopped — see the log above."
                 registerGameFonts(); self.artVersion += 1
-                self.refreshMouseFix(); self.refresh()
+                self.refreshMouseFix(); self.refreshComfig(); self.refresh()
             }
         }
         do { try p.run() } catch { setupRunning = false; setupLog = ["FAIL \(error)"] }
@@ -277,7 +303,7 @@ final class Launcher: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             UserDefaults.standard.set(url.path, forKey: "gameHome")
             registerGameFonts(); artVersion += 1
-            refreshMouseFix(); refresh()
+            refreshMouseFix(); refreshComfig(); refresh()
         }
     }
 
@@ -285,17 +311,17 @@ final class Launcher: ObservableObject {
 
     func setMouseFix(_ on: Bool) {
         Task.detached {
-            let r = shell(["/usr/bin/python3", Paths.mousePatch, on ? "apply" : "revert"])
+            let r = shell(["/bin/bash", Paths.mousePatch, on ? "apply" : "revert"])
             await MainActor.run {
                 self.message = r.status == 0
                     ? (on ? "Mouse fix applied — takes effect on next launch." : "Mouse fix removed — takes effect on next launch.")
                     : "Mouse fix: " + r.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.refreshMouseFix()
+                self.refreshMouseFix(); self.refreshComfig()
             }
         }
     }
 
-    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, extraArgs: String) {
+    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, extraArgs: String) {
         guard !launching, !tf2Running else { return }
         refreshChecks()
         guard readyToPlay else { message = "Setup incomplete — see the Setup tab."; return }
@@ -303,9 +329,14 @@ final class Launcher: ObservableObject {
         message = steam == .online ? "Starting Team Fortress 2…" : "Starting Steam — waiting for login…"
         var extra = ["DXVK_CONFIG_FILE": pacing.dxvkConfig, "TF2_FRIENDS_ONLINE": friendsOffline ? "0" : "1"]
         if hud { extra["MTL_HUD_ENABLED"] = "1" }
+        extra["TF2_RENDERER"] = metalRenderer ? "tf2mt" : "dxvk"
+        extra["TF2_FRAMELOG"] = frameLog ? "1" : "0"
+        extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
         let args = ["/bin/bash", Paths.script("play.sh")] + pacing.launchArgs + extraArgs.split(separator: " ").map(String.init)
+        let firstPreset = comfigPreset == "none"   // new install: mastercomfig Low (recommended) before the first launch
         Task.detached {
+            if firstPreset { shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", "low"]) }
             try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
             let r = shell(args, env: env)
             let logURL = URL(fileURLWithPath: Paths.logs + "/launcher.log")
@@ -317,7 +348,7 @@ final class Launcher: ObservableObject {
             await MainActor.run {
                 self.launching = false
                 self.message = r.status == 0 ? "Have fun!" : "Launch failed — open Logs for details."
-                self.refresh()
+                self.refresh(); if firstPreset { self.refreshComfig() }
             }
         }
     }
@@ -416,19 +447,6 @@ struct StatusRow: View {
     }
 }
 
-struct TweakRow: View {
-    let icon: String
-    let title: String
-    let detail: String
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon).font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.tfOrangeLight)
-                .frame(width: 22)
-            RowText(title: title, detail: detail)
-        }
-    }
-}
-
 struct PlayButtonStyle: ButtonStyle {
     let enabled: Bool
     func makeBody(configuration: Configuration) -> some View {
@@ -476,13 +494,15 @@ struct TabButton: View {
 
 // MARK: - views
 
-enum Tab: String, CaseIterable { case settings = "Settings", tweaks = "Tweaks", setup = "Setup" }
+enum Tab: String, CaseIterable { case settings = "Settings", setup = "Setup", debug = "Debug" }
 
 struct ContentView: View {
     @StateObject private var launcher = Launcher()
     @AppStorage("pacing") private var pacingRaw = Pacing.vsync.raw
     @AppStorage("metalHUD") private var metalHUD = false
     @AppStorage("friendsOffline") private var friendsOffline = true
+    @AppStorage("metalRenderer") private var metalRenderer = true
+    @AppStorage("frameLog") private var frameLog = false
     @AppStorage("extraArgs") private var extraArgs = ""
     @AppStorage("tab") private var tabRaw = Tab.settings.rawValue   // (@State needs the Xcode macro plugin)
     private var tab: Tab { Tab(rawValue: tabRaw) ?? .settings }
@@ -511,8 +531,8 @@ struct ContentView: View {
                         ScrollView {
                             switch tab {
                             case .settings: settings
-                            case .tweaks: tweaks
                             case .setup: setup
+                            case .debug: debug
                             }
                         }
                         .scrollIndicators(.never)
@@ -583,11 +603,31 @@ struct ContentView: View {
 
     private var settings: some View {
         Card(title: "") {
+            OptionRow(title: "Native Metal Renderer",
+                      detail: "tf2mt's Direct3D 9 → Metal renderer instead of DXVK.",
+                      isOn: $metalRenderer)
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack {
+                RowText(title: "Graphics preset",
+                        detail: launcher.comfigInstalled ? "mastercomfig profile. Applies on next launch."
+                                                         : "mastercomfig, downloaded on first launch.")
+                // no preset yet: shown as Low, which the first launch installs (Launcher.play)
+                Picker("", selection: Binding(get: { launcher.comfigPreset == "none" ? "low" : launcher.comfigPreset },
+                                              set: { launcher.setComfig($0) })) {
+                    if launcher.comfigPreset != "none" && !Self.presets.contains(launcher.comfigPreset) {
+                        Text(launcher.comfigPreset.capitalized).tag(launcher.comfigPreset)
+                    }
+                    ForEach(Self.presets, id: \.self) { p in
+                        Text(p == "low" ? "Low (recommended, competitive)" : p.capitalized).tag(p)
+                    }
+                }
+                .labelsHidden().frame(width: 250)
+            }
+            Divider().overlay(Color.white.opacity(0.06))
             HStack {
                 RowText(title: "Frame pacing",
-                        detail: Pacing(raw: pacingRaw).capFPS != nil
-                            ? "Caps use the game's limiter, which paces unevenly under Wine — vsync is smoother."
-                            : "Vsync syncs to your display with triple buffering: no tearing.")
+                        detail: Pacing(raw: pacingRaw).capFPS != nil ? "Caps pace unevenly under Wine; vsync is smoother."
+                                                                    : "Vsync: no tearing. Uncapped: lowest latency.")
                 Picker("", selection: pacing) {
                     ForEach(Pacing.options(displayHz: displayRefreshHz)) { p in
                         Text(p.label(displayHz: displayRefreshHz)).tag(p)
@@ -596,19 +636,15 @@ struct ContentView: View {
                 .labelsHidden().frame(width: 250)
             }
             Divider().overlay(Color.white.opacity(0.06))
-            OptionRow(title: "Metal performance HUD",
-                      detail: "Apple's overlay with real displayed FPS and frame times.", isOn: $metalHUD)
-            Divider().overlay(Color.white.opacity(0.06))
-            OptionRow(title: "Friends offline while playing",
-                      detail: "Prevents menu/loadout stutter from friend status updates. Restored on exit.",
-                      isOn: $friendsOffline)
-            Divider().overlay(Color.white.opacity(0.06))
-            OptionRow(title: "Smooth mouse fix (Wine patch)",
-                      detail: launcher.mouseFix == .unknown
-                        ? "Needs the tf2mt runtime — run Setup first."
-                        : "Stops Wine dropping mouse motion on cursor warps.",
+            OptionRow(title: "Smooth mouse fix",
+                      detail: launcher.mouseFix == .unknown ? "Run Setup first."
+                                                            : "Aim updates every frame, at any refresh rate.",
                       isOn: Binding(get: { launcher.mouseFix == .applied }, set: { launcher.setMouseFix($0) }))
                 .disabled(launcher.mouseFix == .unknown)
+            Divider().overlay(Color.white.opacity(0.06))
+            OptionRow(title: "Friends offline while playing",
+                      detail: "Avoids menu stutter. Restored on exit.",
+                      isOn: $friendsOffline)
             Divider().overlay(Color.white.opacity(0.06))
             VStack(alignment: .leading, spacing: 6) {
                 Text("Extra launch options").font(.secondary(15)).foregroundStyle(Color.tfCream)
@@ -619,23 +655,17 @@ struct ContentView: View {
             }
         }
     }
+    private static let presets = ["low", "medium", "high", "ultra"]
 
-    private var tweaks: some View {
+    private var debug: some View {
         Card(title: "") {
-            Text("What tf2mt changes on top of Wine + DXVK + MoltenVK — each one measured on Apple Silicon.")
-                .font(.system(size: 12)).foregroundStyle(Color.tfCream.opacity(0.7))
-            TweakRow(icon: "cursorarrow.motionlines", title: "Smooth mouse (Wine patch)",
-                     detail: "Wine dropped mouse motion every time TF2 re-centred the cursor: aim updated ~40×/s at 120 fps. Patched → 120×/s.")
-            TweakRow(icon: "bolt.fill", title: "Async shader compiling + cache",
-                     detail: "DXVK builds GPU pipelines in the background and remembers them, halving compile hitches.")
-            TweakRow(icon: "rectangle.on.rectangle", title: "Tear-free presentation",
-                     detail: "Vsync with triple buffering (MoltenVK has no mailbox mode) — no tearing, steady display rate.")
-            TweakRow(icon: "person.2.slash", title: "Friends offline while playing",
-                     detail: "TF2's friends panel re-queries every friend on each status change; under Wine that froze menus for seconds.")
-            TweakRow(icon: "checkmark.shield", title: "Safe launch order",
-                     detail: "Waits for Steam to log in first; launching earlier made TF2 crash during map load.")
-            TweakRow(icon: "speedometer", title: "Benchmark-chosen defaults",
-                     detail: "msync and frame-latency tweaks were tested and left off — they made frame times worse.")
+            OptionRow(title: "Metal performance HUD",
+                      detail: "Apple's FPS and frame-time overlay.", isOn: $metalHUD)
+            Divider().overlay(Color.white.opacity(0.06))
+            OptionRow(title: "Record frame times (DXVK)",
+                      detail: metalRenderer ? "The Metal renderer always records." : "Logs to ~/Games/tf2/logs/dxvk/.",
+                      isOn: $frameLog)
+                .disabled(metalRenderer)
         }
     }
 
@@ -674,7 +704,7 @@ struct ContentView: View {
                 RowText(title: "Game folder", detail: Paths.game)
                 Button("Change…") { launcher.chooseGameFolder() }.buttonStyle(SmallButtonStyle()).frame(width: 90)
             }
-            Button("Re-check") { launcher.refreshMouseFix(); launcher.refresh() }.buttonStyle(SmallButtonStyle())
+            Button("Re-check") { launcher.refreshMouseFix(); launcher.refreshComfig(); launcher.refresh() }.buttonStyle(SmallButtonStyle())
         }
     }
 
@@ -695,7 +725,8 @@ struct ContentView: View {
     private var playButton: some View {
         let canPlay = !launcher.tf2Running && !launcher.launching && launcher.readyToPlay
         return Button {
-            launcher.play(pacing: Pacing(raw: pacingRaw), hud: metalHUD, friendsOffline: friendsOffline, extraArgs: extraArgs)
+            launcher.play(pacing: Pacing(raw: pacingRaw), hud: metalHUD, friendsOffline: friendsOffline,
+                          metalRenderer: metalRenderer, frameLog: frameLog, extraArgs: extraArgs)
         } label: {
             HStack(spacing: 12) {
                 if launcher.launching { ProgressView().controlSize(.small).tint(.white) }

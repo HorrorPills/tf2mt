@@ -11,7 +11,7 @@ cp "$([ "$ref" = null ] && echo build/null/d3d9.dll || echo "$TF2_HOME/wine/shar
 cp "$TF2_HOME/wine/share/dxvk/x86_64-windows/d3d9.dll" "$TF2DIR/d3d9_oracle.dll"
 trap 'rm -f "$TF2DIR/d3d9.dll" "$TF2DIR/d3d9_ref.dll" "$TF2DIR/d3d9_oracle.dll"' EXIT
 : > "$TF2DIR/tf/console.log"
-TF2MT_TAG=$tag TF2MT_TRACE_DIR="Z:${R//\//\\}" scripts/tf2.sh -condebug -usercon -windowed -noborder -w 1920 -h 1080 \
+TF2MT_TAG=$tag TF2MT_TRACE_DIR="Z:${R//\//\\}" scripts/tf2.sh -insecure -condebug -usercon -windowed -noborder -w 1920 -h 1080 \
   +sv_lan 1 +rcon_password tf2mt +ip 127.0.0.1 +maxplayers 24 +map koth_harvest_final >/dev/null
 until pgrep -f 'Team Fortress 2.tf_win64' >/dev/null; do sleep 1; done
 P=$(pgrep -f 'Team Fortress 2.tf_win64')

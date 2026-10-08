@@ -75,10 +75,10 @@ for f in dxvk.conf dxvk-immediate.conf; do cp "$TF2MT_ROOT/config/$f" "$TF2_HOME
 ok "DXVK configs → $TF2_HOME/config"
 
 step "Smooth mouse fix (Wine patch)"
-st=$(/usr/bin/python3 "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.py" status 2>&1)
+st=$(/bin/bash "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.sh" status 2>&1)
 case $st in
   patched*)  skip "already applied" ;;
-  original*) /usr/bin/python3 "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.py" apply >/dev/null && ok "applied" || fail "patch failed" ;;
+  original*) /bin/bash "$TF2MT_ROOT/tools/wine-patches/winemac_warp_nodiscard.sh" apply >/dev/null && ok "applied" || fail "patch failed" ;;
   *)         todo "this Wine build is not the tested one — patch not applied (mouse may feel ~40 Hz)" ;;
 esac
 

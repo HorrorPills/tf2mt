@@ -1,0 +1,13 @@
+; d3d9.dll placed beside tf_win64.exe: forwards to the tf2mt.dll builtin (Wine dll dir). Keeps Wine's own d3d9
+; and DXVK untouched (ADR-002).
+LIBRARY d3d9.dll
+EXPORTS
+  Direct3DCreate9 = tf2mt.Direct3DCreate9
+  Direct3DCreate9Ex = tf2mt.Direct3DCreate9Ex
+  D3DPERF_BeginEvent = tf2mt.D3DPERF_BeginEvent
+  D3DPERF_EndEvent = tf2mt.D3DPERF_EndEvent
+  D3DPERF_GetStatus = tf2mt.D3DPERF_GetStatus
+  D3DPERF_QueryRepeatFrame = tf2mt.D3DPERF_QueryRepeatFrame
+  D3DPERF_SetMarker = tf2mt.D3DPERF_SetMarker
+  D3DPERF_SetOptions = tf2mt.D3DPERF_SetOptions
+  D3DPERF_SetRegion = tf2mt.D3DPERF_SetRegion

@@ -1,10 +1,11 @@
 # tf2mt — Team Fortress 2 tuned for Apple Silicon
 
-tf2mt runs the 64-bit Windows version of **Team Fortress 2** on Apple Silicon Macs (Wine 10 + DXVK + MoltenVK
-→ Metal), with a set of fixes that were each **measured** on an M1 Max at 120 Hz, and a native macOS launcher.
+tf2mt runs the 64-bit Windows version of **Team Fortress 2** on Apple Silicon Macs under Wine 10, with its own
+Direct3D 9 → Metal renderer (or DXVK + MoltenVK), a set of fixes that were each **measured** on an M1 Max at
+120 Hz, and a native macOS launcher.
 
-> Status: playable and tuned. The long-term goal in [PLAN.md](PLAN.md) — a TF2-specific D3D9 → Metal renderer —
-> is in progress (Phase 0 done, see [docs/phase0-report.md](docs/phase0-report.md)). Today's builds use DXVK.
+> Status: playable online (VAC-secured servers). The native Metal renderer ([PLAN.md](PLAN.md), milestones M0–M10)
+> is the default; DXVK remains one switch away. Current state: [docs/STATUS.md](docs/STATUS.md).
 
 ## What tf2mt fixes
 
@@ -22,6 +23,7 @@ tf2mt runs the 64-bit Windows version of **Team Fortress 2** on Apple Silicon Ma
 * Apple Silicon Mac, macOS 13 or newer (developed on macOS 27, M1 Max)
 * ~35 GB free disk (TF2 ≈ 31 GB)
 * A Steam account (TF2 is free)
+* Nothing else: no Xcode, developer tools or Homebrew. Setup uses only what ships with macOS.
 
 ## Install
 
@@ -30,6 +32,7 @@ tf2mt runs the 64-bit Windows version of **Team Fortress 2** on Apple Silicon Ma
 2. Open tf2mt → **Setup** tab → **Run setup**. It installs, into `~/Games/tf2` (changeable):
    Rosetta 2 (if missing) · the tf2mt Wine runtime (~230 MB download) · a Wine prefix with DXVK · Steam for Windows
    (official Valve installer) · tf2mt's configs · the mouse fix.
+   The first **Play** also installs [mastercomfig](https://github.com/mastercomfig/mastercomfig) with the Low preset.
 3. Click **Log in to Steam** and sign in once (Steam Guard works as usual).
 4. Click **Install TF2** and let Steam download it.
 5. **Play.**
@@ -48,14 +51,39 @@ Set `TF2_HOME` to use a different game folder (default `~/Games/tf2`).
 
 ## Launcher options
 
-* **Frame pacing:** vsync matched to your display (any refresh rate), uncapped, or an fps cap
-  (caps use TF2's own limiter, which paces unevenly under Wine; vsync is smoother).
-* **Metal performance HUD:** Apple's overlay with the real displayed frame rate.
-* **Friends offline while playing:** on by default; turn off if you need party invites (menus may stutter).
-* **Smooth mouse fix:** apply/revert the Wine patch.
+**Settings** (defaults in bold):
+
+* **Native Metal Renderer:** **on**. tf2mt's own Direct3D 9 → Metal renderer; off uses DXVK + MoltenVK.
+* **Graphics preset:** **Low (recommended, competitive)**, Medium, High or Ultra, from
+  [mastercomfig](https://github.com/mastercomfig/mastercomfig). Changes only the `preset=` line of mastercomfig's
+  `cfg/app/setup_hook.cfg`, so your addons stay. Applies on the next launch
+  (`scripts/mastercomfig.sh status|set <preset>`).
+* **Frame pacing:** **vsync** at your display's refresh rate, uncapped, or an fps cap (caps use TF2's own limiter,
+  which paces unevenly under Wine).
+* **Smooth mouse fix:** **on**. Aim updates on every rendered frame, at any refresh rate.
+* **Friends offline while playing:** **on**. Prevents menu stutter; turn off if you need party invites.
 * **Extra launch options:** passed to TF2 like Steam launch options.
 
+**Debug:** Metal performance HUD (Apple's frame-rate overlay) and frame-time recording for DXVK sessions
+(`~/Games/tf2/logs/dxvk/`; the Metal renderer always records to `~/Games/tf2/logs/tf2mt/`).
+
 Starting TF2 from the Steam window bypasses the launcher's options. Use tf2mt to play.
+
+## The native Metal renderer
+
+tf2mt includes its own Direct3D 9 → Metal renderer, built only for TF2 (no DXVK, MoltenVK or Vulkan in between).
+It is on by default in the launcher (**Native Metal Renderer**); from a terminal: `TF2_RENDERER=tf2mt scripts/tf2.sh`.
+
+* **Status:** renders TF2 to within SSIM ≥ 0.999 of DXVK on every reference scene: menus, loadout, HDR, MSAA,
+  high settings, resolution changes. On the benchmark demo it is ~15 % faster than DXVK on Low; on Medium its
+  average is ~22 % lower but its frame times are steadier (1 % low 118 vs 60 fps, uncapped). Shaders compile
+  in the background and are pre-warmed from a persistent cache (`~/Games/tf2/cache/tf2mt`). Details: `docs/m6-report.md` … `docs/m9-report.md`.
+* **Online:** plays on VAC-secured servers (Casual, community).
+* **Nothing permanent:** the renderer is installed when TF2 starts and removed when it exits (also after a crash).
+  Turning the option off plays on DXVK. Session logs: `~/Games/tf2/logs/tf2mt/` (last 5).
+* **Known limits:** tested on Low and Medium (including online play) plus HDR, MSAA and high-detail captures. MvM,
+  `mat_queue_mode 2` and flashlight-heavy scenes are untested. Fixed-function draws are minimal: TF2 only uses
+  them for depth passes.
 
 ## Good to know
 
@@ -76,7 +104,10 @@ Starting TF2 from the Steam window bypasses the launcher's options. Use tf2mt to
 | `tools/launcher/` | SwiftUI launcher (`build.sh` builds `tf2mt.app` and `tf2mt-app.zip`) |
 | `tools/wine-patches/` | the winemac mouse patch (`apply` / `revert` / `status`) |
 | `tools/trace`, `tools/null`, `tools/bench/` | measurement tools: D3D9 timing proxy, null renderer, analysis |
-| `docs/` | measurements and investigations |
+| `src/` | the native renderer: `frontend/` (PE d3d9 replacement), `unixlib/` (Metal backend), `translate/` (D3D9 shader → MSL) |
+| `tools/replay/` | capture/replay of TF2's D3D9 call stream, golden-frame and soak tests |
+| `tests/` | translator opcode tests, golden frame list |
+| `docs/` | measurements and investigations (`STATUS.md` = current state; `m*-report.md` = renderer milestones) |
 
 ## Publishing a release (maintainers)
 
