@@ -1,5 +1,7 @@
 # tf2mt — Team Fortress 2 tuned for Apple Silicon
 
+<img width="1092" height="834" alt="Screenshot 2026-10-08 at 13 12 27" src="https://github.com/user-attachments/assets/a286a706-6c99-44f1-b56a-120eae0c0b9c" />
+
 tf2mt runs the 64-bit Windows version of **Team Fortress 2** on Apple Silicon Macs under Wine 10, with its own
 Direct3D 9 → Metal renderer (or DXVK + MoltenVK), a set of fixes that were each **measured** on an M1 Max at
 120 Hz, and a native macOS launcher.
