@@ -15,7 +15,11 @@
 #include "../translate/msl.h"
 #include "../translate/msl_abi.h"
 #include "../translate/sm.h"
+#include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
+#include <vector>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -119,6 +123,18 @@ double ms_now()
 }
 // stall accounting (M8): time the encoder spent waiting on shader compiles / creating pipelines
 uint64_t g_frames_total;
+
+// Input-to-photon proxy (mouse feel): time from the moment the game is released to start frame k (its previous
+// Present's SUBMIT returned; Source samples input right after) to macOS's presentedTime for frame k's drawable.
+// Same clock: ms_now() and CACurrentMediaTime()/presentedTime both derive from mach_absolute_time.
+double g_frame_start_ms[256];
+std::atomic<uint64_t> g_sub_presents{0};
+std::mutex g_lat_mu;
+std::vector<float> g_lat_samples;
+const int g_game_ahead = [] { const char *v = getenv("TF2MT_GAME_AHEAD"); int n = v ? atoi(v) : 0; return n < 0 ? 0 : n > 2 ? 2 : n; }();
+uint64_t g_lat_dropped;   // drawables reported as never shown (presentedTime 0)
+double g_last_shown_ms;   // presentedTime of the previous shown frame
+uint64_t g_shown_n, g_shown_jumps;   // shown frames, and shown intervals > 12.5 ms (a refresh showed a stale frame)
 extern double g_encode_ms;   // backend CPU time decoding/encoding command streams since the last ledger line
 double g_stall_ms_frame;
 uint64_t g_stall_events, g_pso_misses;
@@ -1108,6 +1124,18 @@ void present(uint32_t bb, std::unique_lock<std::mutex> &lk)
             copy_quad(src, sr, dt, 0, 0, dr, true, (uint32_t)dt.width, (uint32_t)dt.height);
         }
     }
+    if (drawable) {
+        uint64_t k = g_frames_total + 1;
+        double start = (k >= 2) ? g_frame_start_ms[k & 255] : 0.0;
+        [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+            double shown = d.presentedTime * 1000.0;
+            std::lock_guard<std::mutex> g(g_lat_mu);
+            if (shown <= 0.0) { g_lat_dropped++; return; }
+            if (g_last_shown_ms > 0.0) { g_shown_n++; if (shown - g_last_shown_ms > 12.5) g_shown_jumps++; }
+            g_last_shown_ms = shown;
+            if (start > 0.0 && shown > start) g_lat_samples.push_back((float)(shown - start));
+        }];
+    }
     submit_locked(false, drawable);
     {
         double w0 = ms_now();
@@ -1125,6 +1153,17 @@ void present(uint32_t bb, std::unique_lock<std::mutex> &lk)
         tf2mt_log("ledger-perf: last 600 frames: backend encode %.3f ms/frame, GPU %.3f ms/frame (max %.2f), %llu submissions\n",
                   g_encode_ms / 600.0, n ? sum / n : 0.0, mx, (unsigned long long)n);
         g_encode_ms = 0;
+        std::vector<float> lat; uint64_t dropped, shown_n, jumps;
+        { std::lock_guard<std::mutex> g(g_lat_mu); lat.swap(g_lat_samples); dropped = g_lat_dropped; g_lat_dropped = 0;
+          shown_n = g_shown_n; jumps = g_shown_jumps; g_shown_n = g_shown_jumps = 0; }
+        if (!lat.empty()) {
+            std::sort(lat.begin(), lat.end());
+            auto q = [&](double f) { return lat[std::min(lat.size() - 1, (size_t)(f * lat.size()))]; };
+            tf2mt_log("latency: frame start -> on screen, last %zu frames: p50 %.1f p90 %.1f p99 %.1f max %.1f ms; "
+                      "%llu drawables not shown; shown intervals >12.5 ms: %llu of %llu; pacing ahead=%d drawables=%d inflight=%s\n",
+                      lat.size(), q(.5), q(.9), q(.99), (double)lat.back(), (unsigned long long)dropped, (unsigned long long)jumps, (unsigned long long)shown_n,
+                      g_game_ahead, (int)tf2mt_metal_layer().maximumDrawableCount, getenv("TF2MT_INFLIGHT") ? getenv("TF2MT_INFLIGHT") : getenv("TF2MT_MAX_LATENCY") ? getenv("TF2MT_MAX_LATENCY") : "2");
+        }
     }
     if (++g_frames % 600 == 0)
         tf2mt_log("render: %llu frames, %llu draws, %llu skipped; caches: %zu PSOs, %zu DSS, %zu samplers; "
@@ -1362,8 +1401,13 @@ extern "C" NTSTATUS unix_submit(void *args)
         g_enq_batches++;
         g_pending_presents += presents;
         g_qcv.notify_all();
-        // back-pressure: the game may be at most one presented frame ahead of the encoder
-        if (presents) g_qcv.wait(q, [] { return g_pending_presents <= 1; });
+        // back-pressure: the game may be at most g_game_ahead presented frames ahead of the encoder
+        // (TF2MT_GAME_AHEAD, default 0 = the game starts its next frame only once this one is encoded; docs/mouse-input.md)
+        if (presents) g_qcv.wait(q, [] { return g_pending_presents <= g_game_ahead; });
+    }
+    if (presents) {
+        uint64_t k = g_sub_presents.fetch_add((uint64_t)presents) + (uint64_t)presents;   // frame k was just submitted
+        g_frame_start_ms[(k + 1) & 255] = ms_now();                                          // frame k+1 starts now
     }
     return STATUS_SUCCESS;
 }

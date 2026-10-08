@@ -14,6 +14,7 @@ Direct3D 9 → Metal renderer (or DXVK + MoltenVK), a set of fixes that were eac
 | Problem on a stock Wine setup | tf2mt fix | Measured result |
 |---|---|---|
 | Mouse turning feels like 30–40 fps at a steady 120 fps | Patch in Wine's macOS driver: stop discarding mouse motion on every cursor warp (TF2 re-centres the cursor each frame) | Camera updates while turning: **~40/s → ~120/s** ([docs/mouse-input.md](docs/mouse-input.md)) |
+| Aim feels sluggish at a steady 120 fps (Metal renderer) | Shallower frame queue: the game no longer runs a frame ahead of the renderer, 2 display buffers instead of 3 | Frame start → on screen: **~41 ms → ~25–31 ms** ([docs/mouse-input.md](docs/mouse-input.md)) |
 | 2–4 fps in the loadout/class-select screens | Steam Friends set offline while playing (TF2's friends panel issues ~1000 Steam IPC calls per frame on each friend status change; each is ~1 ms under Wine) | Storm seconds: **39 → 0** ([docs/loadout-stall.md](docs/loadout-stall.md)) |
 | Shader-compile hitches | DXVK async pipeline compiling + state cache | Hitches > 20 ms: **7.1 → 3.7 /min** |
 | Tearing | Tear-free presentation (vsync, triple buffered; MoltenVK has no mailbox mode) | No tearing at the display's refresh rate |
@@ -38,6 +39,14 @@ Direct3D 9 → Metal renderer (or DXVK + MoltenVK), a set of fixes that were eac
 3. Click **Log in to Steam** and sign in once (Steam Guard works as usual).
 4. Click **Install TF2** and let Steam download it.
 5. **Play.**
+
+### Updates
+
+The launcher checks GitHub for a new release on launch and every 6 hours (**Setup** tab → *Check for updates
+automatically*, or **Check now**). If there is one, **Update now** downloads `tf2mt-app.zip`, verifies it against
+the SHA-256 checksum GitHub publishes for the file, checks the app's identity and signature, swaps it in place and
+relaunches. It won't update while TF2 is running. Your game folder, settings and logs are untouched.
+(Updating from v0.2.0 or older: download v0.3.0 once by hand. The updater ships from v0.3.0 on.)
 
 Everything can also be done from a terminal with the same scripts:
 
@@ -115,8 +124,12 @@ It is on by default in the launcher (**Native Metal Renderer**); from a terminal
 
 1. `scripts/package-runtime.sh` → `build/release/tf2mt-runtime-*.tar.xz` (+ `.sha256`) — the runtime with the
    original, unpatched `winemac.so`.
-2. `tools/launcher/build.sh --no-install` → `build/launcher/tf2mt-app.zip`.
-3. Create a GitHub release and upload both files.
+2. Commit, then tag the release (`git tag vX.Y.Z`): the app's version comes from `git describe --tags`, and the
+   in-app updater compares it with the release tag. Then `tools/launcher/build.sh --no-install` →
+   `build/launcher/tf2mt-app.zip`.
+3. Create a GitHub release for the tag and upload the files (the runtime only when it changed). The updater only
+   offers non-draft, non-prerelease releases whose tag is newer than the installed app and that carry an asset
+   named exactly `tf2mt-app.zip`.
 4. Put the runtime's download URL and SHA-256 into `config/release.conf`, commit, and rebuild the app (step 2) so the
    bundled setup downloads the runtime automatically.
 

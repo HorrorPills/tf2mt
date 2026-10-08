@@ -161,7 +161,7 @@ void wait_inflight_unlocked()
         id<MTLCommandBuffer> oldest = nil;
         {
             std::lock_guard<std::mutex> g(g_mu);
-            static size_t limit = [] { const char *v = getenv("TF2MT_MAX_LATENCY"); int n = v ? atoi(v) : 2; return (size_t)(n < 1 ? 1 : n > 3 ? 3 : n); }();
+            static size_t limit = [] { const char *v = getenv("TF2MT_INFLIGHT"); if (!v) v = getenv("TF2MT_MAX_LATENCY"); int n = v ? atoi(v) : 2; return (size_t)(n < 1 ? 1 : n > 3 ? 3 : n); }();
             if (g_inflight.size() <= limit) return;   // frames in flight (default 1: lowest input latency)
             oldest = g_inflight.front();
             g_inflight.pop_front();

@@ -377,6 +377,148 @@ final class Launcher: ObservableObject {
 
 // MARK: - style
 
+// MARK: - auto-update (GitHub releases)
+// Checks the latest GitHub release, downloads tf2mt-app.zip, verifies it against the SHA-256 digest GitHub publishes
+// for the asset, checks the unpacked bundle (identifier, version, code signature) and swaps it in place after the
+// launcher quits (old copy kept until the swap succeeds, then relaunch). Never while TF2 is running.
+// Test hooks: defaults key "updateFeedURL" overrides the API URL (file:// works); env TF2MT_UPDATE_AUTOINSTALL=1
+// installs an available update without asking (used by the updater self-test).
+
+struct UpdateError: Error { let message: String }
+struct ReleaseInfo { let tag: String; let notes: String; let page: String; let zipURL: URL; let digest: String?; let size: Int }
+
+func versionParts(_ v: String) -> [Int] {
+    // "v0.3.0", "0.3.0", "v0.2.0-4-gabc123" -> [0,3,0]
+    var core = v.hasPrefix("v") ? String(v.dropFirst()) : v
+    if let dash = core.firstIndex(of: "-") { core = String(core[..<dash]) }
+    return core.split(separator: ".").map { Int($0) ?? 0 }
+}
+func isNewer(_ a: String, than b: String) -> Bool {
+    let x = versionParts(a), y = versionParts(b)
+    for i in 0..<max(x.count, y.count) {
+        let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+        if l != r { return l > r }
+    }
+    return false
+}
+
+enum UpdateState: Equatable {
+    case idle, checking, upToDate, available(String), downloading, installing, failed(String)
+}
+
+final class Updater: ObservableObject {
+    static let repo = "HorrorPills/tf2mt"
+    static let assetName = "tf2mt-app.zip"
+    @Published var state: UpdateState = .idle
+    @Published var latest: ReleaseInfo?
+    @Published var lastChecked: Date?
+    let current: String = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0"
+    private var timer: Timer?
+
+    var feedURL: URL {
+        if let s = UserDefaults.standard.string(forKey: "updateFeedURL"), let u = URL(string: s) { return u }
+        return URL(string: "https://api.github.com/repos/\(Updater.repo)/releases/latest")!
+    }
+
+    func startAutomaticChecks() {
+        check()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.check() }
+    }
+
+    func check() {
+        if state == .checking || state == .downloading || state == .installing { return }
+        state = .checking
+        var req = URLRequest(url: feedURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("tf2mt-launcher/\(current)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            let result: Result<ReleaseInfo?, UpdateError> = {
+                if let err = err { return .failure(UpdateError(message: "Couldn't reach GitHub: \(err.localizedDescription)")) }
+                if let h = resp as? HTTPURLResponse, h.statusCode != 200 { return .failure(UpdateError(message: "GitHub answered HTTP \(h.statusCode).")) }
+                guard let data = data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tag = j["tag_name"] as? String else { return .failure(UpdateError(message: "Unexpected reply from GitHub.")) }
+                if (j["draft"] as? Bool) == true || (j["prerelease"] as? Bool) == true { return .success(nil) }
+                let assets = j["assets"] as? [[String: Any]] ?? []
+                guard let a = assets.first(where: { ($0["name"] as? String) == Updater.assetName }),
+                      let s = a["browser_download_url"] as? String, let u = URL(string: s) else { return .success(nil) }
+                return .success(ReleaseInfo(tag: tag, notes: j["body"] as? String ?? "", page: j["html_url"] as? String ?? "",
+                                            zipURL: u, digest: a["digest"] as? String, size: a["size"] as? Int ?? 0))
+            }()
+            DispatchQueue.main.async {
+                self.lastChecked = Date()
+                switch result {
+                case .failure(let e): self.state = .failed(e.message)
+                case .success(let r):
+                    self.latest = r
+                    if let r = r, isNewer(r.tag, than: self.current) {
+                        self.state = .available(r.tag)
+                        if ProcessInfo.processInfo.environment["TF2MT_UPDATE_AUTOINSTALL"] == "1" { self.install(tf2Running: false) }
+                    } else { self.state = .upToDate }
+                }
+            }
+        }.resume()
+    }
+
+    func install(tf2Running: Bool) {
+        guard case .available = state, let r = latest else { return }
+        if tf2Running { state = .failed("Quit TF2 before updating."); return }
+        let dest = Bundle.main.bundlePath
+        guard FileManager.default.isWritableFile(atPath: (dest as NSString).deletingLastPathComponent) else {
+            state = .failed("No permission to replace \(dest)."); return
+        }
+        guard let digest = r.digest, digest.hasPrefix("sha256:") else {
+            state = .failed("Release has no checksum; download it from GitHub instead."); return
+        }
+        state = .downloading
+        URLSession.shared.downloadTask(with: r.zipURL) { tmp, resp, err in
+            func fail(_ m: String) { DispatchQueue.main.async { self.state = .failed(m) } }
+            if let err = err { return fail("Download failed: \(err.localizedDescription)") }
+            if let h = resp as? HTTPURLResponse, h.statusCode != 200 { return fail("Download failed: HTTP \(h.statusCode).") }
+            guard let tmp = tmp else { return fail("Download failed.") }
+            let work = NSTemporaryDirectory() + "tf2mt-update-\(UUID().uuidString)"
+            let zip = work + "/" + Updater.assetName
+            do {
+                try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(atPath: tmp.path, toPath: zip)
+            } catch { return fail("Couldn't store the download: \(error.localizedDescription)") }
+            DispatchQueue.main.async { self.state = .installing }
+            // 1. checksum (GitHub's asset digest)
+            let sum = shell(["/usr/bin/shasum", "-a", "256", zip]).output.split(separator: " ").first.map(String.init) ?? ""
+            if "sha256:" + sum != digest { return fail("Checksum mismatch; the update was not installed.") }
+            // 2. unpack and verify the new bundle
+            if shell(["/usr/bin/ditto", "-x", "-k", zip, work + "/new"]).status != 0 { return fail("Couldn't unpack the update.") }
+            let app = work + "/new/tf2mt.app"
+            let info = NSDictionary(contentsOfFile: app + "/Contents/Info.plist")
+            guard info?["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
+                  let v = info?["CFBundleShortVersionString"] as? String, versionParts(v) == versionParts(r.tag) else {
+                return fail("The downloaded app doesn't look like tf2mt \(r.tag).")
+            }
+            if shell(["/usr/bin/codesign", "--verify", "--deep", app]).status != 0 { return fail("The downloaded app's signature is broken.") }
+            shell(["/usr/bin/xattr", "-dr", "com.apple.quarantine", app])
+            // 3. swap after this process exits (keep the old copy until the move succeeded), then relaunch
+            let helper = work + "/swap.sh"
+            let script = """
+            #!/bin/bash
+            while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
+            DEST="$1"; NEW="$2"; OLD="$DEST.previous"
+            rm -rf "$OLD"
+            if mv "$DEST" "$OLD" && mv "$NEW" "$DEST"; then rm -rf "$OLD"; else [ -d "$OLD" ] && [ ! -d "$DEST" ] && mv "$OLD" "$DEST"; fi
+            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1
+            open "$DEST"
+            rm -rf "\(work)"
+            """
+            do { try script.write(toFile: helper, atomically: true, encoding: .utf8) } catch { return fail("Couldn't prepare the update.") }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = [helper, dest, app]
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            do { try p.run() } catch { return fail("Couldn't start the update helper.") }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }.resume()
+    }
+}
+
 extension Color {
     static let tfOrange = Color(red: 0.81, green: 0.42, blue: 0.20)      // #CF6A32
     static let tfOrangeLight = Color(red: 0.93, green: 0.55, blue: 0.27)
@@ -498,6 +640,8 @@ enum Tab: String, CaseIterable { case settings = "Settings", setup = "Setup", de
 
 struct ContentView: View {
     @StateObject private var launcher = Launcher()
+    @StateObject private var updater = Updater()
+    @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
     @AppStorage("pacing") private var pacingRaw = Pacing.vsync.raw
     @AppStorage("metalHUD") private var metalHUD = false
     @AppStorage("friendsOffline") private var friendsOffline = true
@@ -547,6 +691,7 @@ struct ContentView: View {
                             Button("Logs") { launcher.openLogs() }
                         }
                         .buttonStyle(SmallButtonStyle())
+                        updateBanner
                         if let m = launcher.message {
                             Text(m).font(.secondary(13)).foregroundStyle(Color.tfCream.opacity(0.7))
                                 .multilineTextAlignment(.center)
@@ -563,6 +708,56 @@ struct ContentView: View {
         }
         .frame(width: 980, height: 690)                       // window adds the 32 pt title-bar inset on top
         .animation(.easeInOut(duration: 0.2), value: launcher.message)
+        .onAppear { if autoUpdateCheck { updater.startAutomaticChecks() } }
+    }
+
+    @ViewBuilder private var updateBanner: some View {
+        switch updater.state {
+        case .available(let tag):
+            VStack(spacing: 6) {
+                Text("Update \(tag) available").font(.secondary(15)).foregroundStyle(Color.tfOrangeLight)
+                HStack(spacing: 10) {
+                    Button("Update now") { updater.install(tf2Running: launcher.tf2Running) }
+                        .buttonStyle(SmallButtonStyle(prominent: true)).disabled(launcher.tf2Running)
+                    if let page = updater.latest?.page, let u = URL(string: page) {
+                        Button("What's new") { NSWorkspace.shared.open(u) }.buttonStyle(SmallButtonStyle())
+                    }
+                }
+                if launcher.tf2Running { Text("Quit TF2 to update.").font(.system(size: 11)).foregroundStyle(Color.tfCream.opacity(0.6)) }
+            }
+            .padding(10).frame(maxWidth: .infinity)
+            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        case .downloading, .installing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(updater.state == .downloading ? "Downloading update…" : "Installing update…").font(.secondary(13)).foregroundStyle(Color.tfCream)
+            }
+        default: EmptyView()
+        }
+    }
+
+    private var updateStatusText: String {
+        switch updater.state {
+        case .idle: return "Installed: \(updater.current)"
+        case .checking: return "Checking…"
+        case .upToDate: return "\(updater.current) is the latest version."
+        case .available(let t): return "\(t) is available (installed: \(updater.current))."
+        case .downloading: return "Downloading…"
+        case .installing: return "Installing…"
+        case .failed(let m): return m
+        }
+    }
+
+    private var updatesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                RowText(title: "Updates", detail: updateStatusText)
+                Button("Check now") { updater.check() }.buttonStyle(SmallButtonStyle()).frame(width: 100)
+                    .disabled(updater.state == .checking || updater.state == .downloading || updater.state == .installing)
+            }
+            OptionRow(title: "Check for updates automatically", detail: "On launch and every 6 hours; you choose when to install.",
+                      isOn: $autoUpdateCheck)
+        }
     }
 
     private var hero: some View {
@@ -671,6 +866,8 @@ struct ContentView: View {
 
     private var setup: some View {
         Card(title: "") {
+            updatesSection
+            Divider().overlay(Color.white.opacity(0.06))
             Text("tf2mt brings its own Wine runtime; Steam and TF2 are installed from Valve, into your own folder. Nothing from Valve is redistributed.")
                 .font(.system(size: 12)).foregroundStyle(Color.tfCream.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)

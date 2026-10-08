@@ -103,10 +103,12 @@ static NTSTATUS unix_attach(void *args)
     g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     g_layer.framebufferOnly = YES;
     g_layer.opaque = YES;
-    // 3 drawables by default. Online test 2026-10-08: 2 drawables + 1 frame in flight nearly doubled missed refreshes
-    // (405/min vs 216/min) without fixing the aim feel. TF2MT_MAX_LATENCY=1 selects the short queue (2 drawables).
-    const char *lat = getenv("TF2MT_MAX_LATENCY");
-    g_layer.maximumDrawableCount = (lat && atoi(lat) == 1) ? 2 : 3;
+    // 2 drawables (+ game ahead 0, render.mm): bench demo, vsync 120 Hz, frame start -> on screen 25 ms vs 41 ms with
+    // 3 drawables + game ahead 1 (docs/mouse-input.md). Earlier online test (2 drawables + 1 in flight, game ahead 1,
+    // m_filter 1) showed more missed refreshes (405/min vs 216/min): watch jumps online. TF2MT_DRAWABLES=3 restores.
+    g_layer.maximumDrawableCount = 2;
+    const char *nd = getenv("TF2MT_DRAWABLES");   // explicit override (2 or 3) for latency experiments
+    if (nd && (atoi(nd) == 2 || atoi(nd) == 3)) g_layer.maximumDrawableCount = atoi(nd);
     g_layer.displaySyncEnabled = p->vsync ? YES : NO;
     g_layer.drawableSize = CGSizeMake(p->width, p->height);
     tlog("attach: hwnd %#llx view %p layer %p %ux%u vsync %u\n", (unsigned long long)p->hwnd, view,
