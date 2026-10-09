@@ -33,6 +33,7 @@ namespace sm = tf2mt::sm;
 namespace msl = tf2mt::msl;
 
 extern "C" CAMetalLayer *tf2mt_metal_layer(void);
+extern "C" id<CAMetalDrawable> tf2mt_next_drawable(void);
 extern "C" void tf2mt_present_tick(void);
 
 namespace tf2mt::be {
@@ -128,6 +129,34 @@ uint64_t g_frames_total;
 // Present's SUBMIT returned; Source samples input right after) to macOS's presentedTime for frame k's drawable.
 // Same clock: ms_now() and CACurrentMediaTime()/presentedTime both derive from mach_absolute_time.
 double g_frame_start_ms[256];
+// per-frame stage times (TF2MT_LATENCY_CSV=<unix path>): where a frame waits between start and screen
+struct FrameTimes { double submit, enc, drawable, commit; float yaw, pitch; bool cam; };
+FrameTimes g_ft[256];
+// Queue drain (docs/mouse-input.md): macOS sometimes keeps one extra frame queued in the compositor (submit -> on screen
+// one refresh longer than achievable), and since frames arrive exactly as fast as they are shown it never drains.
+// presented handler tracks the achievable submit->screen time (floor) and counts consecutive late frames; present()
+// then skips presenting one frame. Off by default; TF2MT_DRAIN=1 enables (see docs/mouse-input.md).
+const bool g_drain_on = [] { const char *v = getenv("TF2MT_DRAIN"); return v && atoi(v) == 1; }();   // opt-in: in live play the queue re-sticks within seconds (141 drains/16 min, latency still ~31 ms)
+// Detection works on half-second medians (outlier frames can't trigger it): floor = lowest median of the last 5
+// minutes; 2 consecutive late windows (1 s) above floor + half a refresh request one drain (>= 2 s apart). A session
+// can start stuck, so one probe drain ~15 s after the first frame (loading/menu) teaches the floor.
+double g_ts_floor = 1e9, g_refresh_ms = 1000.0 / 120.0, g_last_drain_ms, g_sec_start, g_first_shown;
+bool g_probe_done;
+std::vector<double> g_sec_ts;
+std::deque<double> g_sec_medians;
+int g_late_secs;
+std::atomic<bool> g_drain_request{false};
+uint64_t g_drains;
+FILE *latency_csv()
+{
+    static FILE *f = [] {
+        const char *p = getenv("TF2MT_LATENCY_CSV");
+        FILE *h = p ? fopen(p, "w") : nullptr;
+        if (h) fprintf(h, "frame,start,game_ms,drawable_wait_ms,encode_ms,to_screen_ms,total_ms,cam_yaw,cam_pitch\n");
+        return h;
+    }();
+    return f;
+}
 std::atomic<uint64_t> g_sub_presents{0};
 std::mutex g_lat_mu;
 std::vector<float> g_lat_samples;
@@ -1106,15 +1135,28 @@ double g_encode_ms;
 void present(uint32_t bb, std::unique_lock<std::mutex> &lk)
 {
     end_encoder();
+    FrameTimes &ft = g_ft[(g_frames_total + 1) & 255];
+    ft.enc = ms_now();
+    g_ft[(g_frames_total + 2) & 255].cam = false;   // next frame's camera not seen yet
     CAMetalLayer *layer = tf2mt_metal_layer();
     id<CAMetalDrawable> drawable = nil;
     Surf s;
-    if (layer && surf_of(bb, 0, 0, s)) {
+    bool drain = false;
+    if (g_drain_on && g_drain_request.exchange(false) && layer && layer.displaySyncEnabled && ft.enc - g_last_drain_ms > 2000.0) {
+        drain = true; g_last_drain_ms = ft.enc; g_drains++;
+        // a real gap of one refresh with nothing submitted is what lets the compositor queue run empty (a quick next
+        // frame refills it): skip this present and hold the encoder (and so the game) for one refresh
+        lk.unlock(); usleep((useconds_t)(g_refresh_ms * 1000.0)); lk.lock();
+        tf2mt_log("drain: skipped presenting one frame (%s, refresh %.2f ms, drains %llu)\n",
+                  g_drains == 1 ? "probe" : "queue stuck", g_refresh_ms, (unsigned long long)g_drains);
+    }
+    if (!drain && layer && surf_of(bb, 0, 0, s)) {
         // waiting for a drawable (vsync) must not block the game thread's unix calls: drop the lock meanwhile and
         // look the back buffer up again afterwards (the object table may have grown)
         double w0 = ms_now();
         lk.unlock();
-        drawable = [layer nextDrawable];
+        drawable = tf2mt_next_drawable();
+        ft.drawable = ms_now();
         lk.lock();
         g_encode_ms -= ms_now() - w0;
         if (drawable && surf_of(bb, 0, 0, s)) {
@@ -1127,16 +1169,44 @@ void present(uint32_t bb, std::unique_lock<std::mutex> &lk)
     if (drawable) {
         uint64_t k = g_frames_total + 1;
         double start = (k >= 2) ? g_frame_start_ms[k & 255] : 0.0;
+        FrameTimes t = g_ft[k & 255];   // commit time is filled in below, after this copy: pass it separately
+        double *commit_slot = &g_ft[k & 255].commit;
         [drawable addPresentedHandler:^(id<MTLDrawable> d) {
             double shown = d.presentedTime * 1000.0;
             std::lock_guard<std::mutex> g(g_lat_mu);
             if (shown <= 0.0) { g_lat_dropped++; return; }
+            {   // queue-drain bookkeeping
+                double commit = *commit_slot, ts = shown - commit;
+                if (g_last_shown_ms > 0.0) { double iv = shown - g_last_shown_ms; if (iv > 3.0 && iv < 25.0) g_refresh_ms += (iv - g_refresh_ms) * 0.02; }
+                if (commit > 0.0 && ts > 0.0 && ts < 200.0) g_sec_ts.push_back(ts);
+                if (g_sec_start == 0.0) g_sec_start = g_first_shown = shown;
+                if (!g_probe_done && shown - g_first_shown > 15000.0) { g_probe_done = true; g_drain_request = true; }
+                if (shown - g_sec_start >= 500.0) {   // half a second of shown frames
+                    if (g_sec_ts.size() >= 12) {
+                        std::nth_element(g_sec_ts.begin(), g_sec_ts.begin() + g_sec_ts.size() / 2, g_sec_ts.end());
+                        double med = g_sec_ts[g_sec_ts.size() / 2];
+                        g_sec_medians.push_back(med);
+                        if (g_sec_medians.size() > 600) g_sec_medians.pop_front();
+                        g_ts_floor = *std::min_element(g_sec_medians.begin(), g_sec_medians.end());
+                        if (med > g_ts_floor + 0.5 * g_refresh_ms) { if (++g_late_secs >= 2) { g_drain_request = true; g_late_secs = 0; } }
+                        else g_late_secs = 0;
+                    }
+                    g_sec_ts.clear(); g_sec_start = shown;
+                }
+            }
+            if (FILE *f = latency_csv(); f && start > 0.0) {
+                double commit = *commit_slot;
+                fprintf(f, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f\n", (unsigned long long)k, start,
+                        t.submit - start, t.drawable - t.enc, commit - t.drawable, shown - commit, shown - start,
+                        t.cam ? t.yaw : -999.0f, t.cam ? t.pitch : -999.0f);
+            }
             if (g_last_shown_ms > 0.0) { g_shown_n++; if (shown - g_last_shown_ms > 12.5) g_shown_jumps++; }
             g_last_shown_ms = shown;
             if (start > 0.0 && shown > start) g_lat_samples.push_back((float)(shown - start));
         }];
     }
     submit_locked(false, drawable);
+    ft.commit = ms_now();
     {
         double w0 = ms_now();
         lk.unlock();
@@ -1265,7 +1335,22 @@ void decode_batch(const uint32_t *w, const uint32_t *end, std::unique_lock<std::
         case TF2MT_CMD_VDECL: S.decl = p[0]; break;
         case TF2MT_CMD_VS: S.vs = p[0]; break;
         case TF2MT_CMD_PS: S.ps = p[0]; break;
-        case TF2MT_CMD_VS_F: if (p[0] + p[1] <= 256) { memcpy(S.vsf[p[0]], p + 2, p[1] * 16); g_vsf_dirty = true; } break;
+        case TF2MT_CMD_VS_F:
+            if (p[0] + p[1] <= 256) {
+                memcpy(S.vsf[p[0]], p + 2, p[1] * 16); g_vsf_dirty = true;
+                // camera smoothness (latency CSV): first upload of c8..c11 per frame = view-projection; c11 (the
+                // clip-space w row) is the camera forward vector -> yaw/pitch
+                FrameTimes &cf = g_ft[(g_frames_total + 1) & 255];
+                if (!cf.cam && p[0] <= 8 && p[0] + p[1] >= 12) {
+                    const float *wr = (const float *)(p + 2) + (11 - p[0]) * 4;
+                    if (wr[0] != 0.f || wr[1] != 0.f) {
+                        cf.yaw = atan2f(wr[1], wr[0]) * 57.29578f;
+                        cf.pitch = atan2f(wr[2], sqrtf(wr[0] * wr[0] + wr[1] * wr[1])) * 57.29578f;
+                        cf.cam = true;
+                    }
+                }
+            }
+            break;
         case TF2MT_CMD_PS_F: if (p[0] + p[1] <= 224) { memcpy(S.psf[p[0]], p + 2, p[1] * 16); g_psf_dirty = true; } break;
         case TF2MT_CMD_VS_I: if (p[0] + p[1] <= 16) { memcpy(S.vsi.i[p[0]], p + 2, p[1] * 16); g_vsi_dirty = true; } break;
         case TF2MT_CMD_PS_I: if (p[0] + p[1] <= 16) { memcpy(S.psi.i[p[0]], p + 2, p[1] * 16); g_psi_dirty = true; } break;
@@ -1395,6 +1480,7 @@ extern "C" NTSTATUS unix_submit(void *args)
     }
     const uint32_t *w = (const uint32_t *)(uintptr_t)sp->data, *end = w + sp->bytes / 4;
     int presents = count_presents(w, end);
+    if (presents) g_ft[(g_sub_presents.load() + 1) & 255].submit = ms_now();   // game finished this frame
     {
         std::unique_lock<std::mutex> q(g_qmu);
         g_queue.emplace_back(w, end);
@@ -1402,12 +1488,12 @@ extern "C" NTSTATUS unix_submit(void *args)
         g_pending_presents += presents;
         g_qcv.notify_all();
         // back-pressure: the game may be at most g_game_ahead presented frames ahead of the encoder
-        // (TF2MT_GAME_AHEAD, default 0 = the game starts its next frame only once this one is encoded; docs/mouse-input.md)
+        // (TF2MT_GAME_AHEAD, default 0 = lowest latency; 1 halves spike repeats but the owner felt the extra frame as drag; docs/mouse-input.md)
         if (presents) g_qcv.wait(q, [] { return g_pending_presents <= g_game_ahead; });
     }
     if (presents) {
         uint64_t k = g_sub_presents.fetch_add((uint64_t)presents) + (uint64_t)presents;   // frame k was just submitted
-        g_frame_start_ms[(k + 1) & 255] = ms_now();                                          // frame k+1 starts now
+        g_frame_start_ms[(k + 1) & 255] = ms_now();   // frame k+1 starts now
     }
     return STATUS_SUCCESS;
 }

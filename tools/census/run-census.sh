@@ -15,7 +15,7 @@ wait_spawn() {  # wait for a new "Client reached server_spawn" after line $1
   for _ in $(seq 150); do tail -n +"$1" "$TF2DIR/tf/console.log" | grep -q 'Client reached server_spawn' && return 0; sleep 2; done; return 1; }
 
 pkill -f 'Team Fortress 2.tf_win64'; while tf2_running; do sleep 1; done
-steam_running || { scripts/steam.sh >/dev/null; until grep -q 'Logged On' "$STEAM_DIR/logs/connection_log.txt"; do sleep 2; done; sleep 10; }
+ensure_steam || { echo "Steam did not log in"; exit 1; }
 cp build/trace/d3d9.dll "$TF2DIR/d3d9.dll"; cp "$TF2_HOME/wine/share/dxvk/x86_64-windows/d3d9.dll" "$TF2DIR/d3d9_ref.dll"
 # variants change cvars that TF2 saves on exit: keep the owner's config untouched
 cp "$TF2DIR/tf/cfg/config.cfg" "$R/config.cfg.orig"

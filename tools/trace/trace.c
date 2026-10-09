@@ -9,6 +9,7 @@
  */
 #define COBJMACROS
 #define INITGUID
+#include <math.h>
 #include <windows.h>
 #include <d3d9.h>
 #include <stdint.h>
@@ -36,6 +37,7 @@ static uint64_t prev_dev_calls[DEV_NMETHODS];   /* per-frame deltas for the slow
  * its first upload in each frame; a frame whose hash equals the previous frame's shows an unchanged camera. */
 static volatile uint64_t cam_hash_frame, cam_hash_prev;
 static volatile int cam_seen;
+static volatile float cam_yaw = -999.f, cam_pitch = -999.f;   /* from the view-projection matrix's w row (camera forward) */
 static CRITICAL_SECTION log_lock;
 
 static void write_all(HANDLE h, const char *p, size_t n)
@@ -74,7 +76,7 @@ static void log_open(void)
         snprintf(tag, sizeof tag, "%lu", GetCurrentProcessId());
     out_csv = open_out(dir, tag, ".csv");
     out_info = open_out(dir, tag, ".info.txt");
-    static const char hdr[] = "frame,t_ms,ms_between_presents,ms_in_present,draws,calls,thread_cpu_ms,proc_cpu_ms,tid,cam_changed\n";
+    static const char hdr[] = "frame,t_ms,ms_between_presents,ms_in_present,draws,calls,thread_cpu_ms,proc_cpu_ms,tid,cam_changed,cam_yaw,cam_pitch\n";
     if (out_csv != INVALID_HANDLE_VALUE) write_all(out_csv, hdr, sizeof hdr - 1);
     QueryPerformanceFrequency(&qpf);
     QueryPerformanceCounter(&t0);
@@ -124,12 +126,12 @@ static void record_frame(LARGE_INTEGER start, LARGE_INTEGER end)
     EnterCriticalSection(&log_lock);
     double between = last_present.QuadPart ? qpc_ms(start.QuadPart - last_present.QuadPart) : 0.0;
     csv_len += (size_t)snprintf(csv_buf + csv_len, sizeof csv_buf - csv_len,
-        "%llu,%.4f,%.4f,%.4f,%llu,%llu,%.3f,%.3f,%lu,%d\n",
+        "%llu,%.4f,%.4f,%.4f,%llu,%llu,%.3f,%.3f,%lu,%d,%.4f,%.4f\n",
         (unsigned long long)frame_no++, qpc_ms(start.QuadPart - t0.QuadPart), between,
         qpc_ms(end.QuadPart - start.QuadPart),
         (unsigned long long)(draws - last_draws), (unsigned long long)(calls - last_calls),
         last_thread_cpu ? (tcpu - last_thread_cpu) / 1e4 : 0.0, last_proc_cpu ? (pcpu - last_proc_cpu) / 1e4 : 0.0,
-        GetCurrentThreadId(), cam_changed);
+        GetCurrentThreadId(), cam_changed, (double)cam_yaw, (double)cam_pitch);
     if (between > 100.0) {   /* slow frame: log which device methods it called (and how often) */
         char line[4096];
         int n = snprintf(line, sizeof line, "SLOW frame %llu %.1f ms:", (unsigned long long)frame_no - 1, between);
@@ -217,6 +219,12 @@ static HRESULT WINAPI dev_SetVertexShaderConstantF(IDirect3DDevice9Ex *self, UIN
         uint64_t h = 1469598103934665603ull;            /* FNV-1a over the 16 floats */
         for (int i = 0; i < 16; i++) { h ^= w[i]; h *= 1099511628211ull; }
         cam_hash_frame = h; cam_seen = 1;
+        const float *wr = c + (11 - start) * 4;           /* c11 = clip-space w row = camera forward vector */
+        float fx = wr[0], fy = wr[1], fz = wr[2];
+        if (fx != 0.f || fy != 0.f) {
+            cam_yaw = atan2f(fy, fx) * 57.29578f;
+            cam_pitch = atan2f(fz, sqrtf(fx * fx + fy * fy)) * 57.29578f;
+        }
     }
     return IDirect3DDevice9Ex_SetVertexShaderConstantF(INNER(IDirect3DDevice9Ex, self), start, c, count);
 }

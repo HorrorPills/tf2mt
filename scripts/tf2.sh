@@ -38,6 +38,8 @@ if [ "$renderer" = tf2mt ]; then
     ls -dt "$TF2_HOME/logs/tf2mt"/*/ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null   # keep the last 5 sessions
     export TF2MT_UNIX_LOG="$sess/unix.log" TF2MT_TRACE_DIR="Z:${sess//\//\\}" TF2MT_TAG=session
     export TF2MT_FRAME_LOG="Z:${sess//\//\\}\\frames.csv"   # per-frame times (tools/bench/session_report.py)
+    # per-frame start / display / camera timing (docs/mouse-input.md); ~30 MB per hour, so opt-in
+    [ "${TF2MT_LATENCY_LOG:-0}" = 1 ] && export TF2MT_LATENCY_CSV="$sess/latency.csv"
     "$TF2MT_ROOT/scripts/mastercomfig.sh" status > "$sess/preset.txt" 2>/dev/null
   else
     echo "tf2mt layer not available (build it: make frontend unixlib) — starting with DXVK"; renderer=dxvk

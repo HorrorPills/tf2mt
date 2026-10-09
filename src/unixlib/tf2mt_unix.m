@@ -67,6 +67,9 @@ void tf2mt_log(const char *fmt, ...)
 }
 void tf2mt_resources_init(void);
 CAMetalLayer *tf2mt_metal_layer(void) { return g_layer; }
+
+// drawable for the next present (a CAMetalDisplayLink variant was tested 2026-10-09: +1 refresh of latency, removed)
+id<CAMetalDrawable> tf2mt_next_drawable(void) { return [g_layer nextDrawable]; }
 static void present_tick(void);
 void tf2mt_present_tick(void) { present_tick(); }
 NTSTATUS unix_create_buffer(void *), unix_rename_buffer(void *), unix_create_texture(void *), unix_destroy(void *),

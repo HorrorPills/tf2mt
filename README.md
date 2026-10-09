@@ -35,7 +35,7 @@ Direct3D 9 → Metal renderer (or DXVK + MoltenVK), a set of fixes that were eac
 2. Open tf2mt → **Setup** tab → **Run setup**. It installs, into `~/Games/tf2` (changeable):
    Rosetta 2 (if missing) · the tf2mt Wine runtime (~230 MB download) · a Wine prefix with DXVK · Steam for Windows
    (official Valve installer) · tf2mt's configs · the mouse fix.
-   The first **Play** also installs [mastercomfig](https://github.com/mastercomfig/mastercomfig) with the Low preset.
+   The first **Play** also installs [mastercomfig](https://github.com/mastercomfig/mastercomfig) with the Balanced preset (Low is available for competitive play).
 3. Click **Log in to Steam** and sign in once (Steam Guard works as usual).
 4. Click **Install TF2** and let Steam download it.
 5. **Play.**

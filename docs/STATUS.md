@@ -6,6 +6,7 @@ joins online servers itself; online tests are played by the owner (see "Safety")
 ## Where things stand
 | Track | State |
 |---|---|
+| **Overnight 2026-10-09 (uncommitted)** | Balanced preset, bot nav mesh for Harvest, preset matrix, crash-cause fixes, latency experiments (docs/overnight-2026-10-09.md) |
 | **v0.3.1** | Session lifetime: invisible Session app starts Steam/TF2 (macOS 27 background attribution), per-session helper + teardown + orphan sweep; all 6 quit paths owner-tested (docs/session-lifetime.md). |
 | **v0.3.0** | Low-latency pacing default (game ahead 0, 2 drawables; frame start → on screen ~41 → ~25–31 ms, `latency:` lines in unix.log, docs/mouse-input.md) and an in-app auto-updater (GitHub latest release, SHA-256 digest check, in-place swap; README "Updates"). |
 | **Released app (v0.2.0)** | Public at github.com/HorrorPills/tf2mt. Native Metal renderer on by default, mastercomfig Low default (installed on first Play), mouse fix + Friends-offline on, launcher tabs Settings/Setup/Debug. Setup needs nothing beyond stock macOS (mouse patch tool is bash since v0.2.0). v0.1.0: DXVK-only. |

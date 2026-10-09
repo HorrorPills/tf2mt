@@ -406,9 +406,9 @@ final class Launcher: ObservableObject {
         extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
         let args = ["/bin/bash", Paths.script("play.sh")] + pacing.launchArgs + extraArgs.split(separator: " ").map(String.init)
-        let firstPreset = comfigPreset == "none"   // new install: mastercomfig Low (recommended) before the first launch
+        let firstPreset = comfigPreset == "none"   // new install: mastercomfig Balanced (recommended) before the first launch
         Task.detached {
-            if firstPreset { shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", "low"]) }
+            if firstPreset { shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", "balanced"]) }
             try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
             let r = SessionRunner.runSync(Array(args.dropFirst()), env: env)   // args[0] is /bin/bash
             let logURL = URL(fileURLWithPath: Paths.logs + "/launcher.log")
@@ -975,14 +975,15 @@ struct ContentView: View {
                 RowText(title: "Graphics preset",
                         detail: launcher.comfigInstalled ? "mastercomfig profile. Applies on next launch."
                                                          : "mastercomfig, downloaded on first launch.")
-                // no preset yet: shown as Low, which the first launch installs (Launcher.play)
-                Picker("", selection: Binding(get: { launcher.comfigPreset == "none" ? "low" : launcher.comfigPreset },
+                // no preset yet: shown as Balanced, which the first launch installs (Launcher.play)
+                Picker("", selection: Binding(get: { launcher.comfigPreset == "none" ? "balanced" : launcher.comfigPreset },
                                               set: { launcher.setComfig($0) })) {
                     if launcher.comfigPreset != "none" && !Self.presets.contains(launcher.comfigPreset) {
                         Text(launcher.comfigPreset.capitalized).tag(launcher.comfigPreset)
                     }
                     ForEach(Self.presets, id: \.self) { p in
-                        Text(p == "low" ? "Low (recommended, competitive)" : p.capitalized).tag(p)
+                        Text(p == "low" ? "Low (competitive)"
+                             : p == "balanced" ? "Balanced (recommended)" : p.capitalized).tag(p)
                     }
                 }
                 .labelsHidden().frame(width: 250)
@@ -1019,7 +1020,7 @@ struct ContentView: View {
             }
         }
     }
-    private static let presets = ["low", "medium", "high", "ultra"]
+    private static let presets = ["low", "balanced", "medium", "high", "ultra"]
 
     private var debug: some View {
         Card(title: "") {

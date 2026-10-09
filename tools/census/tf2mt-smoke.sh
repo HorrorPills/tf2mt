@@ -5,7 +5,7 @@ set -u
 cd "$(dirname "$0")/../.."; . scripts/_env.sh
 tag=${1:-m3smoke}; L=$TF2_HOME/logs/$tag; rm -rf "$L"; mkdir -p "$L"
 pkill -f 'Team Fortress 2.tf_win64'; while tf2_running; do sleep 1; done
-steam_running || { scripts/steam.sh >/dev/null; until grep -q 'Logged On' "$STEAM_DIR/logs/connection_log.txt"; do sleep 2; done; sleep 10; }
+ensure_steam || { echo "Steam did not log in"; exit 1; }
 scripts/layer-install.sh >/dev/null
 trap 'scripts/layer-uninstall.sh >/dev/null' EXIT
 : > "$TF2DIR/tf/console.log"

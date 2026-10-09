@@ -11,7 +11,7 @@ MAPS=(koth_harvest_final ctf_2fort pl_badwater cp_dustbowl cp_process_final pl_u
 L=$TF2_HOME/logs/soak${PROVIDER/tf2mt/}; rm -rf "$L"; mkdir -p "$L"
 rcon() { python3 tools/bench/rcon.py "$@" 2>/dev/null; }
 pkill -f 'Team Fortress 2.tf_win64'; while tf2_running; do sleep 1; done
-steam_running || { scripts/steam.sh >/dev/null; until grep -q 'Logged On' "$STEAM_DIR/logs/connection_log.txt"; do sleep 2; done; sleep 10; }
+ensure_steam || { echo "Steam did not log in"; exit 1; }
 [ "$PROVIDER" = tf2mt ] && { make -s frontend unixlib; scripts/layer-install.sh >/dev/null; }
 cp "$TF2DIR/tf/cfg/config.cfg" "$L/config.cfg.orig"
 trap '[ "$PROVIDER" = tf2mt ] && scripts/layer-uninstall.sh >/dev/null; cp "$L/config.cfg.orig" "$TF2DIR/tf/cfg/config.cfg"' EXIT
