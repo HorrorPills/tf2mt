@@ -39,14 +39,22 @@ if [ "$renderer" = tf2mt ]; then
     export TF2MT_UNIX_LOG="$sess/unix.log" TF2MT_TRACE_DIR="Z:${sess//\//\\}" TF2MT_TAG=session
     export TF2MT_FRAME_LOG="Z:${sess//\//\\}\\frames.csv"   # per-frame times (tools/bench/session_report.py)
     # per-frame start / display / camera timing (docs/mouse-input.md); ~30 MB per hour, so opt-in
-    [ "${TF2MT_LATENCY_LOG:-0}" = 1 ] && export TF2MT_LATENCY_CSV="$sess/latency.csv"
+    { [ "${TF2MT_LATENCY_LOG:-0}" = 1 ] || [ -f "$TF2_HOME/config/latency-log" ]; } && export TF2MT_LATENCY_CSV="$sess/latency.csv"
     "$TF2MT_ROOT/scripts/mastercomfig.sh" status > "$sess/preset.txt" 2>/dev/null
   else
     echo "tf2mt layer not available (build it: make frontend unixlib) — starting with DXVK"; renderer=dxvk
   fi
 fi
 
-"$WINE" tf.exe -steam -game tf -novid -nojoy -nosteamcontroller -nohltv -particles 1 "$@" >"$TF2_HOME/logs/tf2.log" 2>&1 &
+# Steam overlay (launcher setting, TF2_STEAM_OVERLAY=1, DXVK only): Steam only injects its overlay into games it starts
+# itself, and the in-game store needs the overlay to confirm purchases. The game then inherits Steam's environment
+# instead of this script's (DXVK pacing config and frame-time recording don't apply). Not on the Metal renderer: the
+# overlay only detects a d3d9.dll in system32, and hooked into tf2mt it blanked the menu background (2026-10-12).
+if [ "${TF2_STEAM_OVERLAY:-0}" = 1 ] && [ "$renderer" = dxvk ]; then
+  ( cd "$STEAM_DIR" && "$WINE" steam.exe -applaunch 440 -novid -nojoy -nosteamcontroller -nohltv -particles 1 "$@" ) >"$TF2_HOME/logs/tf2.log" 2>&1 &
+else
+  "$WINE" tf.exe -steam -game tf -novid -nojoy -nosteamcontroller -nohltv -particles 1 "$@" >"$TF2_HOME/logs/tf2.log" 2>&1 &
+fi
 disown
 
 if [ "$renderer" = dxvk-logged ]; then   # remove the timing proxy when the game is gone

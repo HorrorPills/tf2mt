@@ -378,6 +378,26 @@ final class Launcher: ObservableObject {
         }
     }
 
+    /// Debug → "Load .exe…": pick a Windows program and run it in TF2's Wine prefix (scripts/run-exe.sh).
+    func loadExe() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        if let exe = UTType(filenameExtension: "exe") { panel.allowedContentTypes = [exe] }
+        panel.message = "Choose a Windows program to run in TF2's Wine environment"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let name = url.lastPathComponent
+        message = "Starting \(name)…"
+        Task.detached {
+            let r = SessionRunner.runSync([Paths.script("run-exe.sh"), url.path])
+            await MainActor.run {
+                self.message = r.status == 0 ? "Started \(name) (output: logs/run-exe.log)"
+                                             : "Couldn't start \(name): " + r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+    }
+
     // MARK: play & control
 
     func setMouseFix(_ on: Bool) {
@@ -392,7 +412,7 @@ final class Launcher: ObservableObject {
         }
     }
 
-    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, extraArgs: String) {
+    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, steamOverlay: Bool, extraArgs: String) {
         guard !launching, !tf2Running else { return }
         refreshChecks()
         guard readyToPlay else { message = "Setup incomplete — see the Setup tab."; return }
@@ -403,6 +423,7 @@ final class Launcher: ObservableObject {
         if hud { extra["MTL_HUD_ENABLED"] = "1" }
         extra["TF2_RENDERER"] = metalRenderer ? "tf2mt" : "dxvk"
         extra["TF2_FRAMELOG"] = frameLog ? "1" : "0"
+        extra["TF2_STEAM_OVERLAY"] = steamOverlay ? "1" : "0"
         extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
         let args = ["/bin/bash", Paths.script("play.sh")] + pacing.launchArgs + extraArgs.split(separator: " ").map(String.init)
@@ -445,6 +466,11 @@ final class Launcher: ObservableObject {
     func openLogs() {
         try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.logs))
+    }
+
+    /// The TF2 install folder in Finder (custom content goes in tf/custom).
+    func openGameFiles() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: Paths.tf2Dir))
     }
 }
 
@@ -816,6 +842,7 @@ struct ContentView: View {
     @AppStorage("friendsOffline") private var friendsOffline = true
     @AppStorage("metalRenderer") private var metalRenderer = true
     @AppStorage("frameLog") private var frameLog = false
+    @AppStorage("steamOverlay") private var steamOverlay = false
     @AppStorage("extraArgs") private var extraArgs = ""
     @AppStorage("tab") private var tabRaw = Tab.settings.rawValue   // (@State needs the Xcode macro plugin)
     private var tab: Tab { Tab(rawValue: tabRaw) ?? .settings }
@@ -853,11 +880,14 @@ struct ContentView: View {
                     }
                     VStack(spacing: 16) {
                         status
+                        launchOptions
                         playButton
                         HStack(spacing: 10) {
                             Button("Quit TF2") { launcher.quitTF2() }.disabled(!launcher.tf2Running)
                             Button("Start Steam") { launcher.startSteam() }.disabled(launcher.steam != .stopped || !exists(Paths.steamExe))
                             Button("Logs") { launcher.openLogs() }
+                            Button { launcher.openGameFiles() } label: { Label("Game files", systemImage: "folder").lineLimit(1).fixedSize() }
+                                .disabled(!exists(Paths.tf2Dir))
                         }
                         .buttonStyle(SmallButtonStyle())
                         updateBanner
@@ -971,6 +1001,23 @@ struct ContentView: View {
                       detail: "tf2mt's Direct3D 9 → Metal renderer instead of DXVK.",
                       isOn: $metalRenderer)
             Divider().overlay(Color.white.opacity(0.06))
+            OptionRow(title: "Enable Steam Overlay",
+                      detail: "In-game store purchases. Needs DXVK. May affect performance.",
+                      isOn: Binding(get: { steamOverlay && !metalRenderer }, set: { steamOverlay = $0 }))
+                .disabled(metalRenderer)
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack {
+                RowText(title: "Frame pacing",
+                        detail: Pacing(raw: pacingRaw).capFPS != nil ? "Caps pace unevenly under Wine; vsync is smoother."
+                                                                    : "Vsync: no tearing. Uncapped: lowest latency.")
+                Picker("", selection: pacing) {
+                    ForEach(Pacing.options(displayHz: displayRefreshHz)) { p in
+                        Text(p.label(displayHz: displayRefreshHz)).tag(p)
+                    }
+                }
+                .labelsHidden().frame(width: 250)
+            }
+            Divider().overlay(Color.white.opacity(0.06))
             HStack {
                 RowText(title: "Graphics preset",
                         detail: launcher.comfigInstalled ? "mastercomfig profile. Applies on next launch."
@@ -989,18 +1036,6 @@ struct ContentView: View {
                 .labelsHidden().frame(width: 250)
             }
             Divider().overlay(Color.white.opacity(0.06))
-            HStack {
-                RowText(title: "Frame pacing",
-                        detail: Pacing(raw: pacingRaw).capFPS != nil ? "Caps pace unevenly under Wine; vsync is smoother."
-                                                                    : "Vsync: no tearing. Uncapped: lowest latency.")
-                Picker("", selection: pacing) {
-                    ForEach(Pacing.options(displayHz: displayRefreshHz)) { p in
-                        Text(p.label(displayHz: displayRefreshHz)).tag(p)
-                    }
-                }
-                .labelsHidden().frame(width: 250)
-            }
-            Divider().overlay(Color.white.opacity(0.06))
             OptionRow(title: "Smooth mouse fix",
                       detail: launcher.mouseFix == .unknown ? "Run Setup first."
                                                             : "Aim updates every frame, at any refresh rate.",
@@ -1010,15 +1045,18 @@ struct ContentView: View {
             OptionRow(title: "Friends offline while playing",
                       detail: "Avoids menu stutter. Restored on exit.",
                       isOn: $friendsOffline)
-            Divider().overlay(Color.white.opacity(0.06))
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Extra launch options").font(.secondary(15)).foregroundStyle(Color.tfCream)
-                TextField("e.g. +exec myconfig  -console", text: $extraArgs)
-                    .textFieldStyle(.plain).font(.system(size: 13, design: .monospaced))
-                    .padding(8).background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
-                    .foregroundStyle(Color.tfCream)
-            }
         }
+    }
+
+    private var launchOptions: some View {   // right column, between Status and Play
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Extra launch options").font(.secondary(15)).foregroundStyle(Color.tfCream)
+            TextField("e.g. +exec myconfig  -console", text: $extraArgs)
+                .textFieldStyle(.plain).font(.system(size: 13, design: .monospaced))
+                .padding(8).background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+                .foregroundStyle(Color.tfCream)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     private static let presets = ["low", "balanced", "medium", "high", "ultra"]
 
@@ -1031,6 +1069,14 @@ struct ContentView: View {
                       detail: metalRenderer ? "The Metal renderer always records." : "Logs to ~/Games/tf2/logs/dxvk/.",
                       isOn: $frameLog)
                 .disabled(metalRenderer)
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack {
+                RowText(title: "Run a Windows program",
+                        detail: "Runs an .exe in TF2's Wine environment (same prefix and runtime).")
+                Button("Load .exe…") { launcher.loadExe() }
+                    .buttonStyle(SmallButtonStyle()).frame(width: 100)
+                    .disabled(!exists(Paths.wine))
+            }
         }
     }
 
@@ -1083,9 +1129,6 @@ struct ContentView: View {
             StatusRow(label: "Team Fortress 2",
                       value: launcher.tf2Running ? "Running" : launcher.launching ? "Launching…" : "Not running",
                       color: launcher.tf2Running ? .green : launcher.launching ? .yellow : .gray)
-            StatusRow(label: "Mouse fix",
-                      value: launcher.mouseFix == .applied ? "Active" : launcher.mouseFix == .original ? "Off" : "Unavailable",
-                      color: launcher.mouseFix == .applied ? .green : launcher.mouseFix == .original ? .tfRed : .gray)
         }
     }
 
@@ -1093,7 +1136,7 @@ struct ContentView: View {
         let canPlay = !launcher.tf2Running && !launcher.launching && launcher.readyToPlay
         return Button {
             launcher.play(pacing: Pacing(raw: pacingRaw), hud: metalHUD, friendsOffline: friendsOffline,
-                          metalRenderer: metalRenderer, frameLog: frameLog, extraArgs: extraArgs)
+                          metalRenderer: metalRenderer, frameLog: frameLog, steamOverlay: steamOverlay && !metalRenderer, extraArgs: extraArgs)
         } label: {
             HStack(spacing: 12) {
                 if launcher.launching { ProgressView().controlSize(.small).tint(.white) }
