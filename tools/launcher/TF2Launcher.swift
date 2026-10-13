@@ -201,8 +201,10 @@ final class Launcher: ObservableObject {
     @Published var tf2Running = false
     @Published var launching = false
     @Published var mouseFix: MouseFix = .unknown
-    @Published var comfigPreset = "none"       // mastercomfig preset from setup_hook.cfg ("none" = not set)
+    @Published var comfigPreset = "none"       // mastercomfig preset from setup_hook.cfg ("none" = not installed)
     @Published var comfigInstalled = false
+    @Published var comfigOwn = false           // the player has their own autoexec.cfg
+    @Published var comfigPending = false       // a brand-new install: Balanced is installed on the first launch
     @Published var checks: [SetupCheck] = []
     @Published var message: String?
     @Published var setupRunning = false
@@ -258,20 +260,33 @@ final class Launcher: ObservableObject {
     func refreshComfig() {
         Task.detached {
             let out = shell(["/bin/bash", Paths.script("mastercomfig.sh"), "status"]).output
-            let preset = out.components(separatedBy: "preset=").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "none"
-            await MainActor.run { self.comfigInstalled = out.contains("installed=yes"); self.comfigPreset = preset.isEmpty ? "none" : preset }
+            var f: [String: String] = [:]   // "installed=yes preset=balanced own=no pending=no"
+            for kv in out.split(whereSeparator: \.isWhitespace) {
+                let p = kv.split(separator: "=", maxSplits: 1)
+                if p.count == 2 { f[String(p[0])] = String(p[1]) }
+            }
+            let fields = f
+            await MainActor.run {
+                self.comfigInstalled = fields["installed"] == "yes"
+                self.comfigPreset = fields["preset"].flatMap { $0.isEmpty ? nil : $0 } ?? "none"
+                self.comfigOwn = fields["own"] == "yes"
+                self.comfigPending = fields["pending"] == "yes"
+            }
         }
     }
 
     func setComfig(_ preset: String) {
-        guard preset != comfigPreset, preset != "none" else { return }
-        comfigPreset = preset
-        message = comfigInstalled ? "Switching mastercomfig to \(preset.capitalized)…" : "Downloading mastercomfig from GitHub…"
+        guard preset != comfigPreset || (preset == "none" && comfigPending) else { return }
+        comfigPreset = preset; comfigPending = false
+        message = preset == "none" ? "Turning mastercomfig off…"
+            : comfigInstalled ? "Switching mastercomfig to \(preset.capitalized)…" : "Downloading mastercomfig from GitHub…"
         Task.detached {
             let r = shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", preset])
             await MainActor.run {
                 let out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.message = r.status == 0
+                self.message = r.status == 0 && preset == "none"
+                    ? "mastercomfig off — your own config is used" + (self.tf2Running ? " after a TF2 restart." : " from next launch.")
+                    : r.status == 0
                     ? "mastercomfig \(preset.capitalized) selected" + (self.tf2Running ? " — restart TF2 to apply." : " — applies on next launch.")
                     : "mastercomfig: " + out
                 self.refreshComfig()
@@ -427,9 +442,9 @@ final class Launcher: ObservableObject {
         extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
         let args = ["/bin/bash", Paths.script("play.sh")] + pacing.launchArgs + extraArgs.split(separator: " ").map(String.init)
-        let firstPreset = comfigPreset == "none"   // new install: mastercomfig Balanced (recommended) before the first launch
         Task.detached {
-            if firstPreset { shell(["/bin/bash", Paths.script("mastercomfig.sh"), "set", "balanced"]) }
+            // brand-new install only: mastercomfig Balanced (recommended); never reinstalls one the player removed
+            shell(["/bin/bash", Paths.script("mastercomfig.sh"), "auto"])
             try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
             let r = SessionRunner.runSync(Array(args.dropFirst()), env: env)   // args[0] is /bin/bash
             let logURL = URL(fileURLWithPath: Paths.logs + "/launcher.log")
@@ -441,7 +456,7 @@ final class Launcher: ObservableObject {
             await MainActor.run {
                 self.launching = false
                 self.message = r.status == 0 ? "Have fun!" : "Launch failed — open Logs for details."
-                self.refresh(); if firstPreset { self.refreshComfig() }
+                self.refresh(); self.refreshComfig()
             }
         }
     }
@@ -469,8 +484,8 @@ final class Launcher: ObservableObject {
     }
 
     /// The TF2 install folder in Finder (custom content goes in tf/custom).
-    func openGameFiles() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: Paths.tf2Dir))
+    func openGameFiles(_ sub: String = "") {
+        NSWorkspace.shared.open(URL(fileURLWithPath: Paths.tf2Dir + sub))
     }
 }
 
@@ -831,7 +846,7 @@ struct TabButton: View {
 
 // MARK: - views
 
-enum Tab: String, CaseIterable { case settings = "Settings", setup = "Setup", debug = "Debug" }
+enum Tab: String, CaseIterable { case game = "Game", configs = "Configs", setup = "Setup", debug = "Debug" }
 
 struct ContentView: View {
     @StateObject private var launcher = Launcher()
@@ -844,8 +859,8 @@ struct ContentView: View {
     @AppStorage("frameLog") private var frameLog = false
     @AppStorage("steamOverlay") private var steamOverlay = false
     @AppStorage("extraArgs") private var extraArgs = ""
-    @AppStorage("tab") private var tabRaw = Tab.settings.rawValue   // (@State needs the Xcode macro plugin)
-    private var tab: Tab { Tab(rawValue: tabRaw) ?? .settings }
+    @AppStorage("tab") private var tabRaw = Tab.game.rawValue   // (@State needs the Xcode macro plugin)
+    private var tab: Tab { Tab(rawValue: tabRaw) ?? .game }
 
     private var pacing: Binding<Pacing> { Binding(get: { Pacing(raw: pacingRaw) }, set: { pacingRaw = $0.raw }) }
 
@@ -870,7 +885,8 @@ struct ContentView: View {
                         }
                         ScrollView {
                             switch tab {
-                            case .settings: settings
+                            case .game: gameTab
+                            case .configs: configs
                             case .setup: setup
                             case .debug: debug
                             }
@@ -995,7 +1011,7 @@ struct ContentView: View {
         .ignoresSafeArea(edges: .top)
     }
 
-    private var settings: some View {
+    private var gameTab: some View {
         Card(title: "") {
             OptionRow(title: "Native Metal Renderer",
                       detail: "tf2mt's Direct3D 9 → Metal renderer instead of DXVK.",
@@ -1013,24 +1029,6 @@ struct ContentView: View {
                 Picker("", selection: pacing) {
                     ForEach(Pacing.options(displayHz: displayRefreshHz)) { p in
                         Text(p.label(displayHz: displayRefreshHz)).tag(p)
-                    }
-                }
-                .labelsHidden().frame(width: 250)
-            }
-            Divider().overlay(Color.white.opacity(0.06))
-            HStack {
-                RowText(title: "Graphics preset",
-                        detail: launcher.comfigInstalled ? "mastercomfig profile. Applies on next launch."
-                                                         : "mastercomfig, downloaded on first launch.")
-                // no preset yet: shown as Balanced, which the first launch installs (Launcher.play)
-                Picker("", selection: Binding(get: { launcher.comfigPreset == "none" ? "balanced" : launcher.comfigPreset },
-                                              set: { launcher.setComfig($0) })) {
-                    if launcher.comfigPreset != "none" && !Self.presets.contains(launcher.comfigPreset) {
-                        Text(launcher.comfigPreset.capitalized).tag(launcher.comfigPreset)
-                    }
-                    ForEach(Self.presets, id: \.self) { p in
-                        Text(p == "low" ? "Low (competitive)"
-                             : p == "balanced" ? "Balanced (recommended)" : p.capitalized).tag(p)
                     }
                 }
                 .labelsHidden().frame(width: 250)
@@ -1060,6 +1058,61 @@ struct ContentView: View {
     }
     private static let presets = ["low", "balanced", "medium", "high", "ultra"]
 
+    private var configs: some View {
+        Card(title: "") {
+            HStack {
+                RowText(title: "Graphics preset",
+                        detail: launcher.comfigInstalled || launcher.comfigPending ? "mastercomfig profile. Applies on next launch."
+                                                         : "None: mastercomfig is off. Applies on next launch.")
+                // brand-new install: shown as Balanced, which the first launch installs (mastercomfig.sh auto)
+                Picker("", selection: Binding(get: { launcher.comfigPreset == "none" && launcher.comfigPending ? "balanced" : launcher.comfigPreset },
+                                              set: { launcher.setComfig($0) })) {
+                    Text(launcher.comfigOwn ? "None (own config)" : "None (TF2 defaults)").tag("none")
+                    Divider()
+                    if launcher.comfigPreset != "none" && !Self.presets.contains(launcher.comfigPreset) {
+                        Text(launcher.comfigPreset.capitalized).tag(launcher.comfigPreset)
+                    }
+                    ForEach(Self.presets, id: \.self) { p in
+                        Text(p == "low" ? "Low (competitive)"
+                             : p == "balanced" ? "Balanced (recommended)" : p.capitalized).tag(p)
+                    }
+                }
+                .labelsHidden().frame(width: 250)
+            }
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: activeConfig.warn ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 17)).foregroundStyle(activeConfig.warn ? Color.tfOrangeLight : Color.tfGreen)
+                    .frame(width: 22)
+                RowText(title: "Active: " + activeConfig.title, detail: activeConfig.detail)
+            }
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack(spacing: 10) {
+                Button { launcher.openGameFiles("/tf/cfg") } label: { Label("Configs folder", systemImage: "folder") }
+                    .disabled(!exists(Paths.tf2Dir + "/tf/cfg"))
+                Button { launcher.openGameFiles("/tf/custom") } label: { Label("Custom folder", systemImage: "folder") }
+                    .disabled(!exists(Paths.tf2Dir + "/tf/custom"))
+            }
+            .buttonStyle(SmallButtonStyle())
+            Text("Configs: autoexec.cfg and class configs. Custom: HUDs, hitsounds and mods.")
+                .font(.system(size: 12)).foregroundStyle(Color.tfCream.opacity(0.7))
+        }
+        .onAppear { launcher.refreshComfig() }   // the player may have changed files in Finder
+    }
+
+    /// What decides the game's settings, in plain words for the Configs tab.
+    private var activeConfig: (title: String, detail: String, warn: Bool) {
+        if launcher.comfigInstalled {
+            let name = "mastercomfig " + (launcher.comfigPreset == "none" ? "" : launcher.comfigPreset.capitalized)
+            return launcher.comfigOwn
+                ? (name, "It overrides your autoexec.cfg. Pick None to use yours, or move it into cfg/overrides.", true)
+                : (name, "Your own tweaks go in cfg/overrides (runs after mastercomfig).", false)
+        }
+        if launcher.comfigPending { return ("mastercomfig Balanced", "Installed on first launch.", false) }
+        if launcher.comfigOwn { return ("your own config", "autoexec.cfg found, mastercomfig is off.", false) }
+        return ("TF2 defaults", "mastercomfig is off and no autoexec.cfg was found.", false)
+    }
+
     private var debug: some View {
         Card(title: "") {
             OptionRow(title: "Metal performance HUD",
@@ -1082,8 +1135,6 @@ struct ContentView: View {
 
     private var setup: some View {
         Card(title: "") {
-            updatesSection
-            Divider().overlay(Color.white.opacity(0.06))
             Text("tf2mt brings its own Wine runtime; Steam and TF2 are installed from Valve, into your own folder. Nothing from Valve is redistributed.")
                 .font(.system(size: 12)).foregroundStyle(Color.tfCream.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
@@ -1118,6 +1169,8 @@ struct ContentView: View {
                 Button("Change…") { launcher.chooseGameFolder() }.buttonStyle(SmallButtonStyle()).frame(width: 90)
             }
             Button("Re-check") { launcher.refreshMouseFix(); launcher.refreshComfig(); launcher.refresh() }.buttonStyle(SmallButtonStyle())
+            Divider().overlay(Color.white.opacity(0.06))
+            updatesSection
         }
     }
 

@@ -6,6 +6,7 @@ joins online servers itself; online tests are played by the owner (see "Safety")
 ## Where things stand
 | Track | State |
 |---|---|
+| **v0.3.4** | Launcher tabs Game/Configs/Setup/Debug. Configs: Graphics preset gains **None (own config)** (mastercomfig vpks incl. addons parked in $TF2_HOME/config/mastercomfig-off, restored when a preset is picked), active-config line, Configs/Custom folder buttons. First-launch Balanced now decided once per game folder (`mastercomfig.sh auto`, marker config/mastercomfig-auto-done) and skipped when the game already ran or the player has an own autoexec.cfg; v0.3.3 and older reinstalled mastercomfig every launch once setup_hook.cfg was gone (community report). |
 | **v0.3.3** | Steam Overlay setting (DXVK only: Steam launches TF2 via -applaunch so it injects the overlay; on Metal the overlay doesn't detect tf2mt's d3d9 and blanked the menu when forced), Game files button, Debug → Load .exe (scripts/run-exe.sh), launch options moved beside Play. Experimental mouse work (src/unixlib/mousefix.m, tools/inputprobe) kept out of the release. |
 | **Overnight 2026-10-09 (released in v0.3.2)** | Balanced preset, bot nav mesh for Harvest, preset matrix, crash-cause fixes, latency experiments (docs/overnight-2026-10-09.md) |
 | **v0.3.1** | Session lifetime: invisible Session app starts Steam/TF2 (macOS 27 background attribution), per-session helper + teardown + orphan sweep; all 6 quit paths owner-tested (docs/session-lifetime.md). |
