@@ -46,6 +46,34 @@ if [ "$renderer" = tf2mt ]; then
   fi
 fi
 
+# Microphone (launcher setting, TF2_MIC_UID = CoreAudio device UID; empty = the Mac's default input). Wine follows the
+# macOS default input unless winecoreaudio.drv's DefaultInput / DefaultVoiceInput name an endpoint
+# ("{0.0.1.00000000}.{GUID}", Wine 10 mmdevapi/devenum.c). A capture device's GUID lives under devices\1,<UID>
+# (winecoreaudio.drv/mmdevdrv.c get_device_guid): reuse Wine's if it has one, else write a stable one derived from the
+# UID. An unplugged device falls back to the Mac default. Only written when the choice changes.
+apply_mic() {
+  local uid="${TF2_MIC_UID:-}" stamp="$TF2_HOME/config/mic-applied" reg="$TF2_HOME/run/mic.reg"
+  local drv='HKEY_CURRENT_USER\Software\Wine\Drivers\winecoreaudio.drv'
+  [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$uid" ] && return 0
+  mkdir -p "$TF2_HOME/run" "$TF2_HOME/config"
+  if [ -z "$uid" ]; then
+    printf 'REGEDIT4\n\n[%s]\n"DefaultInput"=-\n"DefaultVoiceInput"=-\n' "$drv" > "$reg"
+  else
+    local hex b id
+    hex=$(grep -F -A3 "[Software\\\\Wine\\\\Drivers\\\\winecoreaudio.drv\\\\devices\\\\1,$uid]" "$WINEPREFIX/user.reg" 2>/dev/null |
+          grep -oE '"guid"=hex:[0-9a-f,]{47}' | head -1 | sed 's/.*hex://' | tr -d ,)
+    [ ${#hex} = 32 ] || hex=$(printf 'tf2mt-mic:%s' "$uid" | md5 -q)
+    b=$(echo "$hex" | sed 's/../& /g')
+    set -- $b   # GUID struct bytes: Data1-3 little-endian, Data4 as is
+    id=$(printf '{0.0.1.00000000}.{%s%s%s%s-%s%s-%s%s-%s%s-%s%s%s%s%s%s}' $4 $3 $2 $1 $6 $5 $8 $7 $9 ${10} ${11} ${12} ${13} ${14} ${15} ${16} | tr a-f A-F)
+    printf 'REGEDIT4\n\n[%s\\devices\\1,%s]\n"guid"=hex:%s\n\n[%s]\n"DefaultInput"="%s"\n"DefaultVoiceInput"="%s"\n' \
+      "$drv" "$uid" "$(echo "$hex" | sed 's/../&,/g; s/,$//')" "$drv" "$id" "$id" > "$reg"
+  fi
+  "$WINE" regedit /S "Z:${reg//\//\\}" >/dev/null 2>&1 && printf '%s' "$uid" > "$stamp"
+  rm -f "$reg"
+}
+[ "${TF2_TUNED:-1}" = 1 ] && apply_mic
+
 # Steam overlay (launcher setting, TF2_STEAM_OVERLAY=1, DXVK only): Steam only injects its overlay into games it starts
 # itself, and the in-game store needs the overlay to confirm purchases. The game then inherits Steam's environment
 # instead of this script's (DXVK pacing config and frame-time recording don't apply). Not on the Metal renderer: the

@@ -6,6 +6,7 @@
 import SwiftUI
 import AppKit
 import CoreText
+import CoreAudio
 import UniformTypeIdentifiers
 
 // MARK: - paths & shell
@@ -34,6 +35,53 @@ enum Paths {
     static var dxvkImmediate: String { game + "/config/dxvk-immediate.conf" }
     static var connectionLog: String { steamDir + "/logs/connection_log.txt" }
     static let rosetta = "/Library/Apple/usr/libexec/oah/libRosettaRuntime"
+}
+
+/// Microphones the Mac sees (CoreAudio devices with input channels), as Wine's coreaudio driver lists them: the UID is
+/// what scripts/tf2.sh hands to Wine (TF2_MIC_UID).
+struct AudioInput: Identifiable, Equatable { let uid: String; let name: String; var id: String { uid } }
+
+enum AudioInputs {
+    private static let system = AudioObjectID(kAudioObjectSystemObject)
+    private static func address(_ sel: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: sel, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    }
+    private static func string(_ id: AudioObjectID, _ sel: AudioObjectPropertySelector) -> String? {
+        var addr = address(sel)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr, let v = value else { return nil }
+        return v.takeRetainedValue() as String
+    }
+    private static func inputChannels(_ id: AudioObjectID) -> Int {
+        var addr = address(kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyScopeInput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { buf.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, buf) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(buf.assumingMemoryBound(to: AudioBufferList.self)).reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+    static func list() -> [AudioInput] {
+        var addr = address(kAudioHardwarePropertyDevices)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids.compactMap { id in
+            guard inputChannels(id) > 0, let name = string(id, kAudioObjectPropertyName),
+                  let uid = string(id, kAudioDevicePropertyDeviceUID) else { return nil }
+            return AudioInput(uid: uid, name: name)
+        }
+    }
+    /// The Mac's current default input (System Settings → Sound → Input).
+    static func defaultName() -> String? {
+        var addr = address(kAudioHardwarePropertyDefaultInputDevice)
+        var dev = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &dev) == noErr, dev != 0 else { return nil }
+        return string(dev, kAudioObjectPropertyName)
+    }
 }
 
 /// Environment for every script: the caller's environment plus the configured game folder.
@@ -199,6 +247,9 @@ struct SetupCheck: Identifiable {
 final class Launcher: ObservableObject {
     @Published var steam: SteamState = .stopped
     @Published var tf2Running = false
+    @Published var steamWindow = false        // a Steam window is on screen (Show / Hide Steam button)
+    private var steamPIDs: [pid_t] = []       // steam.exe and steamwebhelper.exe (each Wine process is its own Mac app)
+    private var steamToggled = Date.distantPast   // the window takes a moment to appear/hide: keep the button's label meanwhile
     @Published var launching = false
     @Published var mouseFix: MouseFix = .unknown
     @Published var comfigPreset = "none"       // mastercomfig preset from setup_hook.cfg ("none" = not installed)
@@ -210,6 +261,8 @@ final class Launcher: ObservableObject {
     @Published var setupRunning = false
     @Published var setupLog: [String] = []
     @Published var artVersion = 0          // bumps when the game folder changes, to reload art
+    @Published var micInputs: [AudioInput] = []
+    @Published var micDefault = ""            // name of the Mac's default input
 
     private var timer: Timer?
 
@@ -225,8 +278,9 @@ final class Launcher: ObservableObject {
         refresh()
         refreshMouseFix(); refreshComfig()
         refreshChecks()
+        refreshMics()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in self?.refresh(); self?.refreshMics() }
         }
     }
 
@@ -240,6 +294,22 @@ final class Launcher: ObservableObject {
                 }
             }
             let tf2 = running("tf_win64\\.exe") { $0.hasPrefix("C:") }
+            // Steam's Wine processes and whether any of them has a normal window on screen. CGWindowList gives owner,
+            // layer and size without the Screen Recording permission (only window titles need it).
+            // (the exe path has spaces, "C:\Program Files (x86)\…": take argv[0] up to ".exe", not up to a space)
+            let pids: [pid_t] = shell(["/usr/bin/pgrep", "-fl", "steam\\.exe|steamwebhelper\\.exe"]).output.split(separator: "\n").compactMap { line in
+                guard let sp = line.firstIndex(of: " "), let exe = line[sp...].range(of: ".exe") else { return nil }
+                let argv0 = line[line.index(after: sp)..<exe.upperBound]
+                guard argv0 == "steam.exe" || argv0.hasSuffix("\\steam.exe") || argv0.hasSuffix("\\steamwebhelper.exe") else { return nil }
+                return pid_t(line[..<sp])
+            }
+            let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+            let shown = windows.contains { w in
+                guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
+                      (w[kCGWindowLayer as String] as? Int) == 0,
+                      let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
+                return (b["Width"] ?? 0) >= 300 && (b["Height"] ?? 0) >= 200   // not tray menus or tooltips
+            }
             let steamUp = running("steam\\.exe") { $0 == "steam.exe" || $0.hasSuffix("\\steam.exe") }
             let loggedOn: Bool = {
                 guard steamUp, let log = try? String(contentsOfFile: Paths.connectionLog, encoding: .utf8) else { return false }
@@ -249,12 +319,20 @@ final class Launcher: ObservableObject {
             }()
             await MainActor.run {
                 self.tf2Running = tf2
+                self.steamPIDs = pids
+                if Date().timeIntervalSince(self.steamToggled) > 4 { self.steamWindow = shown }
                 self.steam = steamUp ? (loggedOn ? .online : .starting) : .stopped
                 // the "Starting Steam…" message comes from the button press: keep it in step with the live state
                 if self.message == "Starting Steam…" && self.steam == .online { self.message = "Steam is online." }
                 if tf2 { self.launching = false }
             }
         }
+    }
+
+    func refreshMics() {   // devices come and go (USB mics, AirPods)
+        let list = AudioInputs.list(), def = AudioInputs.defaultName() ?? ""
+        if list != micInputs { micInputs = list }
+        if def != micDefault { micDefault = def }
     }
 
     func refreshComfig() {
@@ -427,7 +505,7 @@ final class Launcher: ObservableObject {
         }
     }
 
-    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, steamOverlay: Bool, extraArgs: String) {
+    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, steamOverlay: Bool, micUID: String, extraArgs: String) {
         guard !launching, !tf2Running else { return }
         refreshChecks()
         guard readyToPlay else { message = "Setup incomplete — see the Setup tab."; return }
@@ -439,6 +517,7 @@ final class Launcher: ObservableObject {
         extra["TF2_RENDERER"] = metalRenderer ? "tf2mt" : "dxvk"
         extra["TF2_FRAMELOG"] = frameLog ? "1" : "0"
         extra["TF2_STEAM_OVERLAY"] = steamOverlay ? "1" : "0"
+        extra["TF2_MIC_UID"] = micUID   // empty: the Mac's default input
         extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
         let args = ["/bin/bash", Paths.script("play.sh")] + pacing.launchArgs + extraArgs.split(separator: " ").map(String.init)
@@ -478,13 +557,28 @@ final class Launcher: ObservableObject {
         Task.detached { SessionRunner.runSync([Paths.script("steam.sh")], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
     }
 
+    func showSteam() {
+        Session.ensureHelper()
+        for pid in steamPIDs { NSRunningApplication(processIdentifier: pid)?.unhide() }   // after Hide Steam
+        steamWindow = true; steamToggled = Date()
+        Task.detached { _ = SessionRunner.runSync([Paths.script("steam.sh"), "--show"], env: scriptEnv(removing: ["MTL_HUD_ENABLED"])) }
+    }
+
+    /// Hides Steam like ⌘H: only Steam's own Wine processes, so TF2 (a separate process) stays as it is. hide()'s result
+    /// isn't reliable (it reported failure while Steam did hide), so the button just follows the screen again after 4 s.
+    /// Steam's Dock icon stays: Wine makes a process a regular app when it first shows a window and never reverts that.
+    func hideSteam() {
+        for pid in steamPIDs { NSRunningApplication(processIdentifier: pid)?.hide() }
+        steamWindow = false; steamToggled = Date()
+    }
+
     func openLogs() {
         try? FileManager.default.createDirectory(atPath: Paths.logs, withIntermediateDirectories: true)
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.logs))
     }
 
     /// The TF2 install folder in Finder (custom content goes in tf/custom).
-    func openGameFiles(_ sub: String = "") {
+    func openGameFiles(_ sub: String) {   // Configs tab: tf/cfg, tf/custom
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.tf2Dir + sub))
     }
 }
@@ -835,7 +929,7 @@ struct TabButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(title.uppercased()).font(.build(14)).tracking(1.2)
+            Text(title.uppercased()).font(.build(14)).tracking(1.2).lineLimit(1).fixedSize()
                 .foregroundStyle(selected ? Color.white : Color.tfCream.opacity(0.55))
                 .padding(.horizontal, 14).padding(.vertical, 7)
                 .background(selected ? Color.tfOrange : Color.clear, in: RoundedRectangle(cornerRadius: 7))
@@ -859,6 +953,8 @@ struct ContentView: View {
     @AppStorage("frameLog") private var frameLog = false
     @AppStorage("steamOverlay") private var steamOverlay = false
     @AppStorage("extraArgs") private var extraArgs = ""
+    @AppStorage("micUID") private var micUID = ""     // "" = the Mac's default input
+    @AppStorage("micName") private var micName = ""   // shown while the chosen mic is unplugged
     @AppStorage("tab") private var tabRaw = Tab.game.rawValue   // (@State needs the Xcode macro plugin)
     private var tab: Tab { Tab(rawValue: tabRaw) ?? .game }
 
@@ -894,19 +990,23 @@ struct ContentView: View {
                         .scrollIndicators(.never)
                         .frame(height: 340)
                     }
-                    VStack(spacing: 16) {
+                    VStack(spacing: 12) {
                         status
                         launchOptions
+                        updateControl
                         playButton
                         HStack(spacing: 10) {
                             Button("Quit TF2") { launcher.quitTF2() }.disabled(!launcher.tf2Running)
-                            Button("Start Steam") { launcher.startSteam() }.disabled(launcher.steam != .stopped || !exists(Paths.steamExe))
+                            if launcher.steam == .online {
+                                Button(launcher.steamWindow ? "Hide Steam" : "Show Steam") {
+                                    launcher.steamWindow ? launcher.hideSteam() : launcher.showSteam()
+                                }
+                            } else {
+                                Button("Start Steam") { launcher.startSteam() }.disabled(launcher.steam != .stopped || !exists(Paths.steamExe))
+                            }
                             Button("Logs") { launcher.openLogs() }
-                            Button { launcher.openGameFiles() } label: { Label("Game files", systemImage: "folder").lineLimit(1).fixedSize() }
-                                .disabled(!exists(Paths.tf2Dir))
                         }
                         .buttonStyle(SmallButtonStyle())
-                        updateBanner
                         if let m = launcher.message {
                             Text(m).font(.secondary(13)).foregroundStyle(Color.tfCream.opacity(0.7))
                                 .multilineTextAlignment(.center)
@@ -926,26 +1026,27 @@ struct ContentView: View {
         .onAppear { if autoUpdateCheck { updater.startAutomaticChecks() } }
     }
 
-    @ViewBuilder private var updateBanner: some View {
+    /// Update offer, right above Play (a banner under Play got cut off; in the tab row it was easy to miss).
+    @ViewBuilder private var updateControl: some View {
         switch updater.state {
         case .available(let tag):
-            VStack(spacing: 6) {
-                Text("Update \(tag) available").font(.secondary(15)).foregroundStyle(Color.tfOrangeLight)
-                HStack(spacing: 10) {
-                    Button("Update now") { updater.install(tf2Running: launcher.tf2Running) }
-                        .buttonStyle(SmallButtonStyle(prominent: true)).disabled(launcher.tf2Running)
-                    if let page = updater.latest?.page, let u = URL(string: page) {
-                        Button("What's new") { NSWorkspace.shared.open(u) }.buttonStyle(SmallButtonStyle())
-                    }
-                }
-                if launcher.tf2Running { Text("Quit TF2 to update.").font(.system(size: 11)).foregroundStyle(Color.tfCream.opacity(0.6)) }
-            }
-            .padding(10).frame(maxWidth: .infinity)
-            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
-        case .downloading, .installing:
             HStack(spacing: 8) {
+                Button { updater.install(tf2Running: launcher.tf2Running) } label: {
+                    Label(launcher.tf2Running ? "Quit TF2 to update to \(tag)" : "Update to \(tag)",
+                          systemImage: "arrow.down.circle.fill").lineLimit(1)
+                }
+                .buttonStyle(SmallButtonStyle(prominent: true))
+                .disabled(launcher.tf2Running)
+                if let page = updater.latest?.page, let u = URL(string: page) {
+                    Button { NSWorkspace.shared.open(u) } label: { Text("What's new").lineLimit(1) }
+                        .buttonStyle(SmallButtonStyle()).frame(width: 100)
+                }
+            }
+        case .downloading, .installing:
+            HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text(updater.state == .downloading ? "Downloading update…" : "Installing update…").font(.secondary(13)).foregroundStyle(Color.tfCream)
+                Text(updater.state == .downloading ? "Downloading update…" : "Installing update…")
+                    .font(.secondary(13)).foregroundStyle(Color.tfCream).lineLimit(1).fixedSize()
             }
         default: EmptyView()
         }
@@ -1002,7 +1103,7 @@ struct ContentView: View {
                         .shadow(color: .black, radius: 3)
                 }
                 Spacer()
-                Text("\(displayName)  ·  \(displayRefreshHz) Hz")
+                Text("\(displayName)  ·  \(displayRefreshHz) Hz  ·  tf2mt \(updater.current)")
                     .font(.secondary(13)).foregroundStyle(Color.tfCream.opacity(0.75)).shadow(color: .black, radius: 3)
             }
             .padding(.horizontal, 28).padding(.bottom, 12)
@@ -1043,6 +1144,21 @@ struct ContentView: View {
             OptionRow(title: "Friends offline while playing",
                       detail: "Avoids menu stutter. Restored on exit.",
                       isOn: $friendsOffline)
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack {
+                RowText(title: "Microphone", detail: "For voice chat in TF2. Applies on next launch.")
+                Picker("", selection: Binding(get: { micUID }, set: { uid in
+                    micUID = uid; micName = launcher.micInputs.first { $0.uid == uid }?.name ?? ""
+                })) {
+                    Text(launcher.micDefault.isEmpty ? "System default" : "System default (\(launcher.micDefault))").tag("")
+                    Divider()
+                    ForEach(launcher.micInputs) { Text($0.name).tag($0.uid) }
+                    if !micUID.isEmpty && !launcher.micInputs.contains(where: { $0.uid == micUID }) {
+                        Text("\(micName.isEmpty ? "Microphone" : micName) (not connected)").tag(micUID)
+                    }
+                }
+                .labelsHidden().frame(width: 250)
+            }
         }
     }
 
@@ -1189,7 +1305,7 @@ struct ContentView: View {
         let canPlay = !launcher.tf2Running && !launcher.launching && launcher.readyToPlay
         return Button {
             launcher.play(pacing: Pacing(raw: pacingRaw), hud: metalHUD, friendsOffline: friendsOffline,
-                          metalRenderer: metalRenderer, frameLog: frameLog, steamOverlay: steamOverlay && !metalRenderer, extraArgs: extraArgs)
+                          metalRenderer: metalRenderer, frameLog: frameLog, steamOverlay: steamOverlay && !metalRenderer, micUID: micUID, extraArgs: extraArgs)
         } label: {
             HStack(spacing: 12) {
                 if launcher.launching { ProgressView().controlSize(.small).tint(.white) }

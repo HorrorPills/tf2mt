@@ -41,6 +41,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>TF2 voice chat uses your microphone.</string>
 </dict></plist>
 PLIST
 # invisible session helper app (macOS 27: Steam/Wine/TF2 must not be attributed to the launcher, see TF2Session.swift)
@@ -57,6 +58,7 @@ cat > "$SES/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>tf2mt-session</string>
   <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>TF2 voice chat uses your microphone.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
 PLIST
