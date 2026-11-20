@@ -21,6 +21,12 @@ if make -C "$ROOT" -s frontend unixlib >/dev/null 2>&1; then
 else
   echo "WARNING: Metal renderer build failed; the app will fall back to DXVK" >&2
 fi
+# relative mouse mode for every renderer (issue #2): loaded into the game by scripts/tf2.sh; needs only clang
+if make -C "$ROOT" -s relmouse >/dev/null 2>&1; then
+  mkdir -p "$RES/tf2mt/build/tf2mt"; cp "$ROOT/build/tf2mt/relmouse.dylib" "$RES/tf2mt/build/tf2mt/"
+else
+  echo "WARNING: relmouse.dylib build failed; mouse input will cap the fps at the display rate on DXVK" >&2
+fi
 # frame-time recording proxy for DXVK sessions (TF2_FRAMELOG=1, launcher Debug tab)
 if make -C "$ROOT" -s trace >/dev/null 2>&1 && [ -f "$ROOT/build/trace/d3d9.dll" ]; then
   mkdir -p "$RES/tf2mt/build/trace"; cp "$ROOT/build/trace/d3d9.dll" "$RES/tf2mt/build/trace/"

@@ -54,17 +54,42 @@ build/tf2mt/d3d9.dll: src/frontend/d3d9_forward.c src/frontend/d3d9_forward.def
 	@mkdir -p $(@D)
 	$(MINGW) $(PECFLAGS) $(PELDFLAGS) -o $@ $^
 UNIXCXX = clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++20 -O2 -Wall -fobjc-arc
-build/tf2mt/tf2mt.so: src/unixlib/tf2mt_unix.m src/unixlib/resources.mm src/unixlib/render.mm src/unixlib/backend.h src/common/unix_calls.h src/common/commands.h $(XLATE_DEP)
+build/tf2mt/tf2mt.so: src/unixlib/tf2mt_unix.m src/unixlib/relmouse.m src/unixlib/resources.mm src/unixlib/render.mm src/unixlib/backend.h src/common/unix_calls.h src/common/commands.h $(XLATE_DEP)
 	@mkdir -p $(@D)
 	$(UNIXCC) -O2 -Wall -fobjc-arc -c -o build/tf2mt/tf2mt_unix.o src/unixlib/tf2mt_unix.m
+	$(UNIXCC) -O2 -Wall -fobjc-arc -c -o build/tf2mt/relmouse.o src/unixlib/relmouse.m
 	$(UNIXCXX) -c -o build/tf2mt/resources.o src/unixlib/resources.mm
 	$(UNIXCXX) -c -o build/tf2mt/render.o src/unixlib/render.mm
 	$(UNIXCXX) -c -o build/tf2mt/sm_decode.o src/translate/sm_decode.cpp
 	$(UNIXCXX) -c -o build/tf2mt/msl_emit.o src/translate/msl_emit.cpp
-	clang++ -arch x86_64 -mmacosx-version-min=13.0 -dynamiclib -install_name @rpath/tf2mt.so -framework Metal -framework QuartzCore -framework Foundation -o $@ build/tf2mt/tf2mt_unix.o build/tf2mt/resources.o build/tf2mt/render.o build/tf2mt/sm_decode.o build/tf2mt/msl_emit.o
+	clang++ -arch x86_64 -mmacosx-version-min=13.0 -dynamiclib -install_name @rpath/tf2mt.so -framework Metal -framework QuartzCore -framework Foundation -framework AppKit -framework ApplicationServices -o $@ build/tf2mt/tf2mt_unix.o build/tf2mt/relmouse.o build/tf2mt/resources.o build/tf2mt/render.o build/tf2mt/sm_decode.o build/tf2mt/msl_emit.o
 	codesign -f -s - $@ >/dev/null 2>&1
 
 .PHONY: frontend unixlib
+
+# relative mouse mode (issue #2) for every renderer: loaded into the game with DYLD_INSERT_LIBRARIES (scripts/tf2.sh)
+relmouse: build/tf2mt/relmouse.dylib
+build/tf2mt/relmouse.dylib: src/unixlib/relmouse.m
+	@mkdir -p $(@D)
+	$(UNIXCC) -O2 -Wall -fobjc-arc -DRELMOUSE_DYLIB -dynamiclib -install_name @rpath/relmouse.dylib -framework AppKit -framework ApplicationServices -framework QuartzCore -o $@ $<
+	codesign -f -s - $@ >/dev/null 2>&1
+.PHONY: relmouse
+
+# issue #2 test tools (tools/bench/mouse-fps.sh, relmouse-checks.sh): display rate, HID mouse, synthetic input, image diff
+mouse-tools: build/tools/refresh build/tools/hiddrive build/tools/mousedrive build/tools/imgdiff
+build/tools/refresh: tools/bench/refresh.swift
+	@mkdir -p $(@D)
+	swiftc -O -o $@ $<
+build/tools/mousedrive: tools/bench/mousedrive.swift
+	@mkdir -p $(@D)
+	swiftc -O -o $@ $<
+build/tools/imgdiff: tools/bench/imgdiff.swift
+	@mkdir -p $(@D)
+	swiftc -O -o $@ $<
+build/tools/hiddrive: tools/bench/hiddrive.c
+	@mkdir -p $(@D)
+	clang -O2 -Wall -framework IOKit -o $@ $<
+.PHONY: mouse-tools relmouse
 
 replay: build/tools/replay.exe
 build/tools/replay.exe: tools/replay/replay.c tools/trace/t9.h

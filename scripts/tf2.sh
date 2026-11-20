@@ -74,6 +74,23 @@ apply_mic() {
 }
 [ "${TF2_TUNED:-1}" = 1 ] && apply_mic
 
+# Relative mouse mode (issue #2, src/unixlib/relmouse.m): while aiming, the macOS cursor stays parked, because every
+# cursor move makes macOS composite the screen and caps the game at the display refresh rate (60 fps on 60 Hz Macs).
+# Loaded into the game for both renderers (the Metal renderer also carries it in tf2mt.so). Opt out: TF2_RELMOUSE=0.
+# Exported here, not by the caller: macOS drops DYLD_* variables when it starts /bin/bash. The copy in $TF2_HOME/run
+# has no quarantine flag (a downloaded app passes it on, and macOS may then refuse to load the library).
+if [ "${TF2_RELMOUSE:-1}" != 0 ] && [ -f "$TF2MT_ROOT/build/tf2mt/relmouse.dylib" ]; then
+  mkdir -p "$TF2_HOME/run"
+  rm_lib="$TF2_HOME/run/relmouse.dylib"
+  cmp -s "$TF2MT_ROOT/build/tf2mt/relmouse.dylib" "$rm_lib" || cp "$TF2MT_ROOT/build/tf2mt/relmouse.dylib" "$rm_lib"
+  xattr -d com.apple.quarantine "$rm_lib" 2>/dev/null || true
+  export DYLD_INSERT_LIBRARIES="$rm_lib${DYLD_INSERT_LIBRARIES:+:$DYLD_INSERT_LIBRARIES}"
+  export TF2MT_RELMOUSE_LOG="$TF2_HOME/logs/relmouse.log"
+elif [ "${TF2_RELMOUSE:-1}" = 0 ]; then
+  export TF2MT_RELMOUSE=0   # also keeps the copy in tf2mt.so off
+fi
+: > "$TF2_HOME/logs/relmouse.log"   # this session's log only (empty when the mode is off)
+
 # Steam overlay (launcher setting, TF2_STEAM_OVERLAY=1, DXVK only): Steam only injects its overlay into games it starts
 # itself, and the in-game store needs the overlay to confirm purchases. The game then inherits Steam's environment
 # instead of this script's (DXVK pacing config and frame-time recording don't apply). Not on the Metal renderer: the
