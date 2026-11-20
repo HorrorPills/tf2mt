@@ -80,3 +80,90 @@ Cost: each drain is one repeated frame, the same thing a stuck queue would cause
 | 1 / 3 (old default, DXVK-like) | 29.4 | 48.6 | 43.1 ms |
 
 Tried as the default, then **reverted the same day**: the owner felt the extra frame as the aim dragging behind the hand ("slippery"), which was worse than the spike repeats. The default stays `TF2MT_GAME_AHEAD=0`.
+
+# Mouse input locked the fps to the display rate (issue #2, 2026-11-20)
+
+**Report (community, 60 Hz MacBook Air, fps cap 120):** 120 fps while still; any mouse or trackpad motion drops the
+fps at once, and after ~1 s of turning it locks to 60. The launcher's mouse fix makes no difference.
+
+**Reproduced** on the owner's M1 Max with the display set to 60 Hz (`tools/bench/mouse-fps.sh`: local map, RED
+Soldier in spawn, synthetic mouse in still/turning phases, per-phase fps from the frame logs):
+
+| 60 Hz, fps_max 120, no vsync | still | turning | Present p50 turning | frame start → on screen, turning |
+|---|---|---|---|---|
+| Metal | 120 fps | **60 fps** | 13.4 ms | **65 ms** (still: 12 ms) |
+| DXVK | 120 fps | **60 fps** | 14.2 ms | — |
+
+**Cause: any change of the cursor position makes macOS composite the screen.** While nothing else changes, macOS
+shows the game's frames directly (submit → on screen 3.6 ms, every frame shown, 120/s on a 60 Hz panel without vsync).
+A cursor move, even of the hidden cursor, sends the window through WindowServer's compositor: at most one frame per
+refresh, ~3 frames queued (submit → on screen 48 ms), and `nextDrawable` blocks until the compositor releases one. TF2
+under Wine moves the cursor all the time: the mouse moves it, and the game re-centres it every frame
+(`SetCursorPos` → `-[WineApplicationController setCursorPosition:]` → `CGWarpMouseCursorPosition`). Isolated by
+phase type (`mousedrive` kinds, Metal, 60 Hz, 250 events/s):
+
+| input | fps |
+|---|---|
+| none | 120 |
+| mouse deltas only (cursor position unchanged) | **120** |
+| cursor position only | 89 |
+| `CGWarpMouseCursorPosition` only | 105 |
+| deltas + position (a real mouse) | 94 (60 at 500 events/s) |
+
+At 240 Hz the same cap is 240 fps, which is why it went unnoticed on the owner's display.
+
+**Fix: relative mouse mode** (`src/unixlib/relmouse.m`). While the game hides the cursor and re-centres it (in-game
+aim), the cursor stays parked at the game's centre point:
+* `CGAssociateMouseAndMouseCursorPosition(false)`: mouse motion no longer moves the macOS cursor; events still carry
+  the device deltas.
+* `-[WineApplicationController handleMouseMove:]` (swizzled): Wine sends absolute positions while the cursor could still
+  move inside the screens, and relative deltas only when it is pinned at an edge. During the call the cached screen
+  rect list is empty, so every motion goes out as `MOUSE_MOVED_RELATIVE` (also the `WM_INPUT` raw deltas). Wine's own
+  code still builds and queues the event.
+* `-[WineApplicationController setCursorPosition:]` (swizzled): the per-frame re-centre does not warp. The first one
+  parks the cursor there, so `GetCursorPos` (which asks the driver after 100 ms without motion) returns the centre and
+  `m_rawinput 0` sees no drift. No events are discarded, so the winemac binary patch is not needed in this mode.
+* The mode starts at the second re-centre to the same point within 1 s while the cursor is hidden, and ends when the
+  cursor is shown (menus), or the app is inactive (`NSApplicationDidResignActiveNotification`).
+
+Delivery: built into `tf2mt.so` (Metal renderer) and as `build/tf2mt/relmouse.dylib`, which `scripts/tf2.sh` loads
+into the game with `DYLD_INSERT_LIBRARIES` for both renderers (the runtime's `wine` has the
+`allow-dyld-environment-variables` entitlement; `/bin/bash` strips `DYLD_*`, so tf2.sh exports it itself). One copy
+installs per process (marker on the class). Log: `~/Games/tf2/logs/relmouse.log`. Opt out: `TF2_RELMOUSE=0`. Not
+active with the Steam Overlay option (Steam starts the game with its own environment).
+
+**Test tools:** `build/tools/hiddrive` posts relative motion through the HID system (`IOHIDPostEvent`), so macOS moves
+the cursor only while the mouse is associated, like real hardware. Synthetic `CGEvent`s carry an absolute position and
+always move the cursor, which hides the fix. `tools/bench/refresh.swift` switches the display rate (restored after each
+run), `tools/bench/relmouse-checks.sh` runs the behaviour checks, `tools/bench/relmouse-matrix.sh` +
+`relmouse-summary.py` the fps/latency matrix.
+
+**Results** (2026-11-20, M1 Max, external 1920x1080 display at 60/120/240 Hz, local `koth_harvest_final`, HID motion
+from `hiddrive` at 500 events/s; "on" = fix on, "off" = `TF2_RELMOUSE=0`). Fps = median while still / while turning.
+Latency = Metal frame start → on screen, p50 while turning.
+
+| display | fps setting | Metal off | Metal on | DXVK off | DXVK on | Metal latency off → on |
+|---|---|---|---|---|---|---|
+| 60 Hz | cap 120 | 120 / **62** | 120 / 120 | 120 / **60** | 120 / 120 | 65 → 11 ms |
+| 60 Hz | uncapped | 321 / **60** | 351 / 349 | 274 / **60** | 273 / 451 | 65 → 5.5 ms |
+| 60 Hz | vsync | 60 / 60 | 60 / 60 | 60 / 60 | 60 / 60 | 49 → 49 ms |
+| 120 Hz | cap 120 | 120 / 120 | 120 / 120 | 120 / 120 | 120 / 120 | 26 → 11 ms |
+| 120 Hz | uncapped | 284 / **125** | 318 / 349 | 263 / **120** | 268 / 444 | 32 → 5.5 ms |
+| 120 Hz | vsync | 120 / 120 | 120 / 120 | 120 / 120 | 120 / 120 | 28 → 24 ms |
+| 240 Hz | cap 120 | 120 / 120 | 120 / 120 | 120 / 120 | 120 / 120 | 16 → 11 ms |
+| 240 Hz | uncapped | 288 / **244** | 297 / 344 | 281 / 268 | 281 / 431 | 9.1 → 5.8 ms |
+| 240 Hz | vsync | 239 / 240 | 239 / 240 | 240 / 240 | 240 / 240 | 15 → 16 ms |
+
+* The bug hits every display when the fps limit is above the refresh rate. The fix removes it in all cases. Vsync
+  results do not change (expected: vsync already limits to the refresh rate).
+* DXVK turning fps is higher than still fps with the fix on. The cause was not found; still fps is the same as before.
+* Behaviour checks (`relmouse-checks.sh`, 60 Hz, cap 120): 9/9 pass on Metal and DXVK, also with `KILL=1`. With
+  `TF2_RELMOUSE=0` the 4 relmouse-specific checks fail, as expected.
+
+**Known limits (not fixed):**
+* **Aim sensitivity changes.** The old absolute path lost ~24 % of motion (12,000 counts gave 1470° of yaw, expected
+  ~1934° at the test sensitivity). Relative mode is 1:1 (1972°). Aim feels ~30 % faster at the same `sensitivity`.
+* **Camera update rate = display rate.** macOS delivers mouse-moved events to apps at the display refresh rate (63/s at
+  60 Hz, 126 at 120, 252 at 240; total motion is kept). At 60 Hz the frame rate is 120 but the camera moves ~60 times a
+  second. This is outside Wine and TF2.
+* Not active with the Steam Overlay launch option.

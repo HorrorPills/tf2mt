@@ -25,6 +25,7 @@ The launcher updates itself when a new version is out.
 ## What it fixes
 
 - **Smooth aim:** mouse movement reaches the game every frame, with less input lag.
+- **Full frame rate while aiming:** moving the mouse no longer locks the game to the display rate (60 fps on 60 Hz Macs).
 - **No menu stutter:** loadout and class select stay smooth.
 - **Fewer hitches and no tearing.**
 - **Clean exit:** Steam and Wine close when you quit TF2.

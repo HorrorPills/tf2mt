@@ -66,6 +66,7 @@ void tf2mt_log(const char *fmt, ...)
     fflush(g_log);
 }
 void tf2mt_resources_init(void);
+void tf2mt_relmouse_install(void);   // relmouse.m (issue #2)
 CAMetalLayer *tf2mt_metal_layer(void) { return g_layer; }
 
 // drawable for the next present (a CAMetalDisplayLink variant was tested 2026-10-09: +1 refresh of latency, removed)
@@ -86,6 +87,7 @@ static NTSTATUS unix_init(void *args)
     g_queue = [g_device newCommandQueue];
     g_macdrv = dlsym(RTLD_DEFAULT, "macdrv_functions");
     tf2mt_resources_init();
+    tf2mt_relmouse_install();
     tlog("tf2mt.so init: device '%s', macdrv_functions %p\n", g_device.name.UTF8String, (void *)g_macdrv);
     return g_macdrv ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
