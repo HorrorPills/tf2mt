@@ -91,6 +91,37 @@ elif [ "${TF2_RELMOUSE:-1}" = 0 ]; then
 fi
 : > "$TF2_HOME/logs/relmouse.log"   # this session's log only (empty when the mode is off)
 
+# TF2 update of 2026-11-23 (build 26876676): Valve removed the DirectX 8 meshes (.dx80.vtx) from tf2_misc_dir.vpk
+# (14,400 -> 10). DX levels below 90 now draw DX9 meshes with DX8 shader settings. tf2mt never sets a DX8 level, but a
+# player's own launch options or the saved level (registry DXLevel_V1, kept from an old -dxlevel 8x) can. Both are
+# moved to 95 (the level tf2mt is built and tested for, docs/decisions/ADR-001). One -dxlevel launch saves the level,
+# so the registry fix happens once. Log: $TF2_HOME/logs/migrations.log
+migrate_log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$TF2_HOME/logs/migrations.log"; echo "tf2mt: $*"; }
+args=(); has_dx=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -dxlevel|+mat_dxlevel)
+      has_dx=1
+      if [[ "${2:-}" =~ ^[0-9]+$ ]] && [ "$2" -lt 90 ]; then
+        migrate_log "launch option '$1 $2' changed to '-dxlevel 95' (DX8 meshes were removed from TF2 on 2026-11-23)"
+        args+=(-dxlevel 95); shift 2; continue
+      fi ;;
+  esac
+  args+=("$1"); shift
+done
+if [ "$has_dx" = 0 ]; then
+  dxl=$(awk '/^\[Software\\\\Valve\\\\Source\\\\tf\\\\Settings\]/ {s=1; next} /^\[/ {s=0} s && /^"DXLevel_V1"=dword:/ {sub(/.*dword:/, ""); print; exit}' "$WINEPREFIX/user.reg" 2>/dev/null)
+  if [ -n "$dxl" ] && [ $((16#$dxl)) -lt 90 ]; then
+    migrate_log "saved DirectX level $((16#$dxl)) changed to 95 for this launch (TF2 saves it; video settings are reset to the DX9 defaults)"
+    args+=(-dxlevel 95)
+  fi
+fi
+# Experimental Rubikon physics (launcher Debug tab, TF2_RUBIKON=1): Valve's Source 2 physics backport (2026-11-23,
+# bin/x64/vphysics_rubikon.dll, 64-bit only). It loads under Wine 10 with no DLL override (imports: tier0, kernel32,
+# rpcrt4) and adds the vrn* cvars; tested 2026-11-24 on both renderers (listen server, physics props, ragdoll).
+if [ "${TF2_RUBIKON:-0}" = 1 ] && [[ " ${args[*]:-} " != *" -rubikon "* ]]; then args+=(-rubikon); fi
+set -- ${args[@]+"${args[@]}"}
+
 # Steam overlay (launcher setting, TF2_STEAM_OVERLAY=1, DXVK only): Steam only injects its overlay into games it starts
 # itself, and the in-game store needs the overlay to confirm purchases. The game then inherits Steam's environment
 # instead of this script's (DXVK pacing config and frame-time recording don't apply). Not on the Metal renderer: the

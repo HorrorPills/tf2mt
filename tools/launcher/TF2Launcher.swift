@@ -505,7 +505,7 @@ final class Launcher: ObservableObject {
         }
     }
 
-    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, steamOverlay: Bool, micUID: String, extraArgs: String) {
+    func play(pacing: Pacing, hud: Bool, friendsOffline: Bool, metalRenderer: Bool, frameLog: Bool, steamOverlay: Bool, rubikon: Bool, micUID: String, extraArgs: String) {
         guard !launching, !tf2Running else { return }
         refreshChecks()
         guard readyToPlay else { message = "Setup incomplete — see the Setup tab."; return }
@@ -517,6 +517,7 @@ final class Launcher: ObservableObject {
         extra["TF2_RENDERER"] = metalRenderer ? "tf2mt" : "dxvk"
         extra["TF2_FRAMELOG"] = frameLog ? "1" : "0"
         extra["TF2_STEAM_OVERLAY"] = steamOverlay ? "1" : "0"
+        extra["TF2_RUBIKON"] = rubikon ? "1" : "0"   // -rubikon (Valve's experimental Source 2 physics)
         extra["TF2_MIC_UID"] = micUID   // empty: the Mac's default input
         extra["TF2MT_VSYNC"] = pacing.raw == "vsync" ? "1" : "0"   // Metal renderer follows Frame pacing too
         let env = scriptEnv(extra, removing: hud ? [] : ["MTL_HUD_ENABLED"])
@@ -952,6 +953,7 @@ struct ContentView: View {
     @AppStorage("metalRenderer") private var metalRenderer = true
     @AppStorage("frameLog") private var frameLog = false
     @AppStorage("steamOverlay") private var steamOverlay = false
+    @AppStorage("rubikon") private var rubikon = false
     @AppStorage("extraArgs") private var extraArgs = ""
     @AppStorage("micUID") private var micUID = ""     // "" = the Mac's default input
     @AppStorage("micName") private var micName = ""   // shown while the chosen mic is unplugged
@@ -1239,6 +1241,13 @@ struct ContentView: View {
                       isOn: $frameLog)
                 .disabled(metalRenderer)
             Divider().overlay(Color.white.opacity(0.06))
+            OptionRow(title: "Experimental Rubikon Physics (-rubikon)",
+                      detail: "Valve's Source 2 physics backport. Client ragdolls in Casual; full physics on -rubikon servers.",
+                      isOn: $rubikon)
+                .help("Adds -rubikon to the launch options. Valve's experimental Source 2 physics engine "
+                      + "(vphysics_rubikon.dll, Nov 23, 2026 update): client-side ragdolls in Casual, full physics on "
+                      + "community or listen servers that also run -rubikon. Off by default.")
+            Divider().overlay(Color.white.opacity(0.06))
             HStack {
                 RowText(title: "Run a Windows program",
                         detail: "Runs an .exe in TF2's Wine environment (same prefix and runtime).")
@@ -1305,7 +1314,7 @@ struct ContentView: View {
         let canPlay = !launcher.tf2Running && !launcher.launching && launcher.readyToPlay
         return Button {
             launcher.play(pacing: Pacing(raw: pacingRaw), hud: metalHUD, friendsOffline: friendsOffline,
-                          metalRenderer: metalRenderer, frameLog: frameLog, steamOverlay: steamOverlay && !metalRenderer, micUID: micUID, extraArgs: extraArgs)
+                          metalRenderer: metalRenderer, frameLog: frameLog, steamOverlay: steamOverlay && !metalRenderer, rubikon: rubikon, micUID: micUID, extraArgs: extraArgs)
         } label: {
             HStack(spacing: 12) {
                 if launcher.launching { ProgressView().controlSize(.small).tint(.white) }
